@@ -1,0 +1,8 @@
+# 컴파일 산출물
+alarm_server
+alarm_client
+lib/*.so
+
+# 빌드 오브젝트
+*.o
+*.a
