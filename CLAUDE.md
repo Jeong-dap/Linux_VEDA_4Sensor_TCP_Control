@@ -302,7 +302,7 @@ typedef struct {
 1. **멀티스레드 (pthread)** — 장치별 독립 스레드, mutex+cond로 공유 상태 보호
 2. **공유 라이브러리 (.so)** — dlopen/dlsym 런타임 로드
 3. **서버 데몬화** — `fork()` + `setsid()` + 표준 입출력 `/dev/null` 리다이렉션
-4. **클라이언트 시그널** — SIGINT(Ctrl+C)만 정상 종료, 나머지(SIGTERM·SIGHUP·SIGPIPE) SIG_IGN
+4. **클라이언트 시그널** — SIGINT(Ctrl+C)만 정상 종료, 나머지(SIGTERM·SIGHUP·SIGPIPE·SIGTSTP·SIGQUIT) SIG_IGN
 5. **Makefile** — lib / server / client 독립 빌드 타겟
 
 ### 데몬화 구현 (server/daemon.c)
@@ -350,6 +350,8 @@ signal(SIGINT,  sigint_handler);  // Ctrl+C → close(g_sock) + exit(0)
 signal(SIGTERM, SIG_IGN);
 signal(SIGHUP,  SIG_IGN);
 signal(SIGPIPE, SIG_IGN);         // 서버 연결 끊김 시 크래시 방지
+signal(SIGTSTP, SIG_IGN);         // Ctrl+Z (일시정지) 무시
+signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ```
 
 ### 클라이언트 실행
