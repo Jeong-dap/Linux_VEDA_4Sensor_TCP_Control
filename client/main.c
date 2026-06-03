@@ -250,6 +250,8 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, SIG_IGN);
     signal(SIGHUP,  SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);  /* Ctrl+Z (일시정지) 무시 */
+    signal(SIGQUIT, SIG_IGN);  /* Ctrl+\ (종료+코어덤프) 무시 */
 
     g_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (g_sock < 0) { perror("socket"); exit(EXIT_FAILURE); }
