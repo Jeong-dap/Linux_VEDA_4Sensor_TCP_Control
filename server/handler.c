@@ -126,19 +126,16 @@ void *sensor_thread_fn(void *arg) {
                 g_state.led_brightness = BRIGHTNESS_HIGH;
                 g_state.buzzer_state   = 1;
             }
-            int cfd = g_state.client_fd;
             pthread_mutex_unlock(&g_state.lock);
 
             if (!already) {
                 dispatch_led(ACT_SET_BRIGHTNESS, BRIGHTNESS_HIGH);
                 dispatch_buzzer(ACT_ON);
 
-                if (cfd >= 0) {
-                    Message e1 = {MSG_EVENT, DEV_SENSOR, EVT_INTRUSION, 0};
-                    Message e2 = {MSG_EVENT, DEV_LED,    EVT_ALARM_ON,  0};
-                    send(cfd, &e1, sizeof(e1), 0);
-                    send(cfd, &e2, sizeof(e2), 0);
-                }
+                Message e1 = {MSG_EVENT, DEV_SENSOR, EVT_INTRUSION, 0};
+                Message e2 = {MSG_EVENT, DEV_LED,    EVT_ALARM_ON,  0};
+                broadcast_msg(&e1);
+                broadcast_msg(&e2);
                 log_event("INTRUSION DETECTED");
                 log_event("ALARM ON (LED HIGH + BUZZER)");
 
@@ -187,28 +184,22 @@ void *segment_thread_fn(void *arg) {
 
         pthread_mutex_lock(&g_state.lock);
         g_state.segment_value = count;
-        int cfd = g_state.client_fd;
         pthread_mutex_unlock(&g_state.lock);
 
         /* 매초 EVT_COUNTDOWN 전송 */
-        if (cfd >= 0) {
-            Message evt = {MSG_EVENT, DEV_SEGMENT, EVT_COUNTDOWN, (uint8_t)count};
-            send(cfd, &evt, sizeof(evt), 0);
-        }
+        Message evt = {MSG_EVENT, DEV_SEGMENT, EVT_COUNTDOWN, (uint8_t)count};
+        broadcast_msg(&evt);
 
         if (count == 0) {
             /* 카운트다운 완료 → 부저 ON, 이벤트 전송 */
             pthread_mutex_lock(&g_state.lock);
             g_state.buzzer_state = 1;
-            cfd = g_state.client_fd;
             pthread_mutex_unlock(&g_state.lock);
 
             dispatch_buzzer(ACT_ON);
 
-            if (cfd >= 0) {
-                Message evt = {MSG_EVENT, DEV_BUZZER, EVT_ALARM_TRIGGERED, 0};
-                send(cfd, &evt, sizeof(evt), 0);
-            }
+            Message alarm_evt = {MSG_EVENT, DEV_BUZZER, EVT_ALARM_TRIGGERED, 0};
+            broadcast_msg(&alarm_evt);
             log_event("COUNTDOWN REACHED 0 - BUZZER TRIGGERED");
 
             sleep(1);  /* 1초 후 세그먼트 OFF */
@@ -281,7 +272,7 @@ void *handle_client(void *arg) {
                 default:
                     resp = (Message){MSG_RESP, DEV_LED, msg.action, RESP_ERR};
                 }
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
                 break;
             }
 
@@ -316,14 +307,30 @@ void *handle_client(void *arg) {
                 default:
                     resp = (Message){MSG_RESP, DEV_BUZZER, msg.action, RESP_ERR};
                 }
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
                 break;
             }
 
             case DEV_SEGMENT: {
+                if (msg.action == ACT_OFF) {
+                    pthread_mutex_lock(&g_state.lock);
+                    pthread_t old_tid   = g_seg_tid;
+                    int       was_alive = g_seg_running;
+                    pthread_mutex_unlock(&g_state.lock);
+
+                    if (was_alive) {
+                        pthread_cancel(old_tid);
+                        pthread_join(old_tid, NULL);
+                    }
+                    log_event("COUNTDOWN STOPPED (manual)");
+                    resp = (Message){MSG_RESP, DEV_SEGMENT, ACT_OFF, RESP_OK};
+                    broadcast_msg(&resp);
+                    break;
+                }
+
                 if (msg.action != ACT_SET_NUMBER || msg.value < 1 || msg.value > 9) {
                     resp = (Message){MSG_RESP, DEV_SEGMENT, msg.action, RESP_ERR};
-                    send(cfd, &resp, sizeof(resp), 0);
+                    broadcast_msg(&resp);
                     break;
                 }
 
@@ -351,14 +358,14 @@ void *handle_client(void *arg) {
                                (void *)(intptr_t)(int)msg.value);
 
                 resp = (Message){MSG_RESP, DEV_SEGMENT, ACT_SET_NUMBER, RESP_OK};
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
                 break;
             }
 
             case DEV_SYSTEM: {
                 if (msg.action != ACT_ALARM_OFF) {
                     resp = (Message){MSG_RESP, DEV_SYSTEM, msg.action, RESP_ERR};
-                    send(cfd, &resp, sizeof(resp), 0);
+                    broadcast_msg(&resp);
                     break;
                 }
 
@@ -388,13 +395,13 @@ void *handle_client(void *arg) {
                 log_event("ALARM OFF (manual)");
 
                 resp = (Message){MSG_RESP, DEV_SYSTEM, ACT_ALARM_OFF, RESP_OK};
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
                 break;
             }
 
             default:
                 resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
             }
             break;  /* MSG_CMD end */
 
@@ -403,7 +410,7 @@ void *handle_client(void *arg) {
             if (msg.device == DEV_SENSOR && msg.action == ACT_GET_LUX) {
                 uint8_t lux = (uint8_t)fp_sensor_read();
                 resp = (Message){MSG_RESP, DEV_SENSOR, ACT_GET_LUX, lux};
-                send(cfd, &resp, sizeof(resp), 0);
+                broadcast_msg(&resp);
                 break;
             }
 
@@ -421,19 +428,25 @@ void *handle_client(void *arg) {
                 resp = (Message){MSG_RESP, msg.device, ACT_GET_STATUS, val};
             else
                 resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-            send(cfd, &resp, sizeof(resp), 0);
+            broadcast_msg(&resp);
             break;
         }
 
         default:
             resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-            send(cfd, &resp, sizeof(resp), 0);
+            broadcast_msg(&resp);
         }
     }
 
     /* recv() == 0 : 클라이언트 연결 끊김 */
     pthread_mutex_lock(&g_state.lock);
-    g_state.client_fd = -1;
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (g_state.client_fds[i] == cfd) {
+            g_state.client_fds[i] = -1;
+            g_state.n_clients--;
+            break;
+        }
+    }
     pthread_mutex_unlock(&g_state.lock);
     close(cfd);
     return NULL;

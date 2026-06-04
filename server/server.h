@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "protocol.h"
 
+#define MAX_CLIENTS 4
+
 typedef struct {
     int alarm_active;
     int led_state;
@@ -12,7 +14,8 @@ typedef struct {
     int buzzer_state;
     int sensor_blocked;
     int segment_value;
-    int client_fd;
+    int client_fds[MAX_CLIENTS];
+    int n_clients;
     pthread_mutex_t lock;
 } SystemState;
 
@@ -21,7 +24,7 @@ typedef struct { int action;            int pending; } BuzzerCmd;
 
 /* ── main.c 에서 정의된 전역 변수 ── */
 extern SystemState      g_state;
-extern char             g_tty_path[64];  /* 데몬화 전 터미널 경로 */
+extern char             g_tty_path[64];
 
 extern LedCmd           g_led_cmd;
 extern pthread_mutex_t  g_led_mtx;
@@ -63,6 +66,7 @@ extern void (*fp_segment_cleanup)(void);
 void dispatch_led(int action, int value);
 void dispatch_buzzer(int action);
 void log_event(const char *msg);
+void broadcast_msg(Message *msg);   /* 모든 연결된 클라이언트에 전송 */
 
 /* ── handler.c 에서 정의된 스레드 함수 ── */
 void *led_thread_fn(void *arg);

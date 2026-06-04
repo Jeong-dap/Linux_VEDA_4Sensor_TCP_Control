@@ -38,9 +38,10 @@ client:
 
 deploy:
 	-ssh $(PIHOST) pkill -f alarm_server
-	ssh $(PIHOST) mkdir -p $(PIDIR)/lib
+	ssh $(PIHOST) mkdir -p $(PIDIR)/lib $(PIDIR)/web
 	scp alarm_server $(PIHOST):$(PIDIR)/
 	scp lib/*.so     $(PIHOST):$(PIDIR)/lib/
+	scp web/server.js web/index.html web/package.json $(PIHOST):$(PIDIR)/web/
 
 clean:
 	rm -f alarm_server alarm_client lib/*.so

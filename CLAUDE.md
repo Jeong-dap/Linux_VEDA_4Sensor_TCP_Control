@@ -25,6 +25,9 @@ Project/
 │   └── server.h        # SystemState, LedCmd, BuzzerCmd 구조체 + extern 선언
 ├── client/
 │   └── main.c          # CLI 메뉴 루프, 이벤트 수신 스레드
+├── web/
+│   ├── server.js       # Node.js WebSocket↔TCP 브리지 (포트 60000)
+│   └── index.html      # 웹 UI (LED/부저/세그먼트/조도/상태 제어)
 ├── lib/
 │   ├── led.c           # LED 제어 (softPwm) → led.so
 │   ├── buzzer.c        # 부저 제어 (softTone) + Für Elise 멜로디 → buzzer.so
@@ -210,6 +213,7 @@ typedef struct {
 #define ACT_ALARM_OFF       0x06
 #define ACT_PLAY_MELODY     0x07   // 부저 멜로디 재생 (Für Elise)
 #define ACT_GET_LUX         0x08   // 조도 수치 조회 (0~255)
+// DEV_SEGMENT + ACT_OFF: 카운트다운 강제 중지
 
 /* LED 밝기 (ACT_SET_BRIGHTNESS의 value) */
 #define BRIGHTNESS_LOW  0x01   // duty cycle 25%
@@ -283,15 +287,18 @@ void dispatch_led(int action, int value) {
 ### 공유 상태 구조체 (server/server.h)
 
 ```c
+#define MAX_CLIENTS 4
+
 typedef struct {
-    int  alarm_active;      // 경보 활성 여부
-    int  led_state;         // 0=off, 1=on
-    int  led_brightness;    // BRIGHTNESS_LOW/MID/HIGH
-    int  buzzer_state;      // 0=off, 1=on
-    int  sensor_blocked;    // 0=정상, 1=차단(침입)
-    int  segment_value;     // 현재 표시 숫자 (-1=꺼짐)
-    int  client_fd;         // 연결된 클라이언트 소켓 (-1=미연결)
-    pthread_mutex_t lock;   // 공유 자원 보호
+    int  alarm_active;              // 경보 활성 여부
+    int  led_state;                 // 0=off, 1=on
+    int  led_brightness;            // BRIGHTNESS_LOW/MID/HIGH
+    int  buzzer_state;              // 0=off, 1=on
+    int  sensor_blocked;            // 0=정상, 1=차단(침입)
+    int  segment_value;             // 현재 표시 숫자 (-1=꺼짐)
+    int  client_fds[MAX_CLIENTS];   // 연결된 클라이언트 소켓 배열
+    int  n_clients;                 // 현재 연결 수
+    pthread_mutex_t lock;           // 공유 자원 보호
 } SystemState;
 ```
 
@@ -366,12 +373,25 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ```
 [1] LED 제어         — ON / OFF / 밝기 3단계 (LOW·MID·HIGH)
 [2] 부저 제어        — ON / OFF / 멜로디 재생 (Für Elise)
-[3] 세그먼트 제어    — 1~9 카운트다운 시작
+[3] 세그먼트 제어    — 1~9 카운트다운 시작 / 10 중지
 [4] 상태 조회        — LED / 부저 / 센서 ON·OFF 상태
 [5] 조도 수치 확인   — PCF8591T 현재 조도값 (0~255)
 [6] 도움말
 [0] 종료 (Ctrl+C)
 ```
+
+### 웹 인터페이스
+
+```
+브라우저 ←WebSocket:60000→ Node.js 브리지 (web/server.js) ─┐
+                                                            ├─ TCP:8080 → 라즈베리파이 C 서버
+CLI 클라이언트 (alarm_client) ──────────────────────────────┘
+```
+
+- C 서버는 최대 **4개 클라이언트** 동시 연결 지원 (MAX_CLIENTS 4)
+- 이벤트 발생 시 `broadcast_msg()` 로 모든 클라이언트에 동시 전송
+- 웹 실행: 우분투에서 `cd web && node server.js 172.20.33.119`
+- 브라우저: `http://우분투IP:60000` (Tailscale: `http://100.80.55.100:60000`)
 
 ---
 
@@ -464,7 +484,7 @@ void log_event(const char *msg) {
 
 | 상황 | 처리 방법 |
 |------|-----------|
-| recv() == 0 (클라이언트 연결 끊김) | close(fd), g_state.client_fd=-1, 핸들러 스레드 종료 |
+| recv() == 0 (클라이언트 연결 끊김) | client_fds 배열에서 fd 제거, n_clients--, 핸들러 스레드 종료 |
 | 카운트다운 중 새 ACT_SET_NUMBER | pthread_cancel + pthread_join 후 재시작 |
 | ACT_ALARM_OFF | stop_melody_thread() + 세그먼트 스레드 취소 모두 처리 |
 | dlopen 경로 문제 (데몬 CWD = `/`) | readlink("/proc/self/exe") 로 절대경로 계산, 데몬화 전에 로드 |
@@ -495,5 +515,5 @@ void log_event(const char *msg) {
 |------|------|------|-----------|
 | 6/2 (1일차) | 기반 구축 ✅ | 헤더 5종, 공유 라이브러리 4종, Makefile, server.h | 2장, 3장, WiringPi |
 | 6/3 (2일차) | 서버 구현 ✅ | daemon.c, dlopen 로드, 장치 전담 스레드, TCP accept, handler.c | 5-6장, 7-8장, 9장 |
-| 6/4 (3일차) | 클라이언트 + 추가기능 ✅ | client/main.c (CLI 메뉴 6항목, 이벤트 수신), 로그, 멜로디, 조도 수치 조회, 경보 5초 자동 해제, PCF8591T I2C 센서 교체 | 3-4장, 5-6장 |
+| 6/4 (3일차) | 클라이언트 + 추가기능 ✅ | CLI 메뉴 6항목, 웹 인터페이스(Node.js+HTML), 다중 클라이언트(MAX_CLIENTS 4), broadcast_msg, 카운트다운 중지, 조도 수치 조회, 경보 5초 자동 해제, PCF8591T I2C 센서 | 3-4장, 5-6장 |
 | 6/5 (4일차) | 마무리 | 통합 테스트, gdb 디버깅, README, 제출 파일 구성 | 1장 |
