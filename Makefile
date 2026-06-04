@@ -21,7 +21,7 @@ SRV_LDFLAGS = -lwiringPi $(if $(WIRING_LIB),-L$(WIRING_LIB))
 
 .PHONY: all server client lib clean deploy
 
-all: lib server client deploy
+all: lib server client
 
 lib:
 	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/led.so          lib/led.c          $(SRV_LDFLAGS)

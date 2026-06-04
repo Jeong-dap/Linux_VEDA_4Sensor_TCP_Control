@@ -155,7 +155,27 @@ typedef struct {
 
 ---
 
-### 6. 카운트다운 시작 `ACT_SET_NUMBER`
+### 6. 멜로디 재생 `ACT_PLAY_MELODY`
+
+> `MSG_CMD` / 응답 있음
+
+**요청**
+
+```
+{ type=MSG_CMD, device=DEV_BUZZER, action=ACT_PLAY_MELODY, value=0x00 }
+```
+
+> 부저로 Für Elise 멜로디를 재생한다. 재생 중 `ACT_OFF` 또는 새 `ACT_PLAY_MELODY` 수신 시 즉시 중단된다.
+
+**응답 (성공)**
+
+```
+{ type=MSG_RESP, device=DEV_BUZZER, action=ACT_PLAY_MELODY, value=RESP_OK }
+```
+
+---
+
+### 7. 카운트다운 시작 `ACT_SET_NUMBER`
 
 > `MSG_CMD` / 응답 있음 + 이후 EVT_COUNTDOWN 이벤트 연속 수신
 
@@ -177,11 +197,56 @@ typedef struct {
 { type=MSG_RESP, device=DEV_SEGMENT, action=ACT_SET_NUMBER, value=RESP_OK }
 ```
 
-> 응답 이후 서버는 1초마다 `EVT_COUNTDOWN` 이벤트를 자동 전송한다. → [11. 카운트다운 진행](#11-카운트다운-진행-evt_countdown) 참고
+> 응답 이후 서버는 1초마다 `EVT_COUNTDOWN` 이벤트를 자동 전송한다. → [12. 카운트다운 진행](#12-카운트다운-진행-evt_countdown) 참고
 
 ---
 
-### 7. 전체 경보 해제 `ACT_ALARM_OFF`
+### 8. 카운트다운 중지 `ACT_OFF`
+
+> `MSG_CMD` / 응답 있음
+
+**요청**
+
+```
+{ type=MSG_CMD, device=DEV_SEGMENT, action=ACT_OFF, value=0x00 }
+```
+
+> 진행 중인 카운트다운 스레드를 즉시 취소한다. 카운트다운이 없으면 RESP_OK 반환.
+
+**응답 (성공)**
+
+```
+{ type=MSG_RESP, device=DEV_SEGMENT, action=ACT_OFF, value=RESP_OK }
+```
+
+---
+
+### 9. 조도 수치 조회 `ACT_GET_LUX`
+
+> `MSG_QUERY` / 응답 있음
+
+**요청**
+
+```
+{ type=MSG_QUERY, device=DEV_SENSOR, action=ACT_GET_LUX, value=0x00 }
+```
+
+> 서버가 PCF8591T ADC에서 현재 조도값을 즉시 읽어 반환한다.
+
+**응답**
+
+```
+{ type=MSG_RESP, device=DEV_SENSOR, action=ACT_GET_LUX, value=187 }
+```
+
+| value 범위 | 의미 |
+|-----------|------|
+| `0` ~ `169` | 밝음 (정상) |
+| `170` ~ `255` | 어두움 (빛 꺼짐 감지) |
+
+---
+
+### 10. 전체 경보 해제 `ACT_ALARM_OFF`
 
 > `MSG_CMD` / 응답 있음
 
@@ -201,7 +266,7 @@ typedef struct {
 
 ---
 
-### 8. 상태 조회 `ACT_GET_STATUS`
+### 11. 상태 조회 `ACT_GET_STATUS`
 
 > `MSG_QUERY` / 응답 있음
 
@@ -234,31 +299,7 @@ typedef struct {
 
 > 이벤트는 클라이언트의 요청 없이 서버가 자동으로 전송한다. 클라이언트는 별도 수신 스레드(pthread)로 비동기 처리한다.
 
-### 9. 침입 감지 `EVT_INTRUSION`
-
-> 조도센서 스레드가 빛 차단을 감지했을 때 자동 전송
-
-**이벤트**
-
-```
-{ type=MSG_EVENT, device=DEV_SENSOR, action=EVT_INTRUSION, value=0x00 }
-```
-
----
-
-### 10. 경보 활성화 `EVT_ALARM_ON`
-
-> 침입 감지 직후 LED가 최대 밝기로 점등될 때 자동 전송
-
-**이벤트**
-
-```
-{ type=MSG_EVENT, device=DEV_LED, action=EVT_ALARM_ON, value=0x00 }
-```
-
----
-
-### 11. 카운트다운 진행 `EVT_COUNTDOWN`
+### 12. 카운트다운 진행 `EVT_COUNTDOWN`
 
 > `ACT_SET_NUMBER` 명령 수신 후 서버 세그먼트 스레드가 1초마다 전송
 
@@ -278,7 +319,31 @@ typedef struct {
 
 ---
 
-### 12. 부저 울림 `EVT_ALARM_TRIGGERED`
+### 13. 침입 감지 `EVT_INTRUSION`
+
+> 조도센서 조도값 ≥ 170이 연속 3회 감지될 때 자동 전송. 경보는 **5초 후 자동 해제**된다.
+
+**이벤트**
+
+```
+{ type=MSG_EVENT, device=DEV_SENSOR, action=EVT_INTRUSION, value=0x00 }
+```
+
+---
+
+### 14. 경보 활성화 `EVT_ALARM_ON`
+
+> 침입 감지 직후 LED가 최대 밝기로 점등될 때 자동 전송
+
+**이벤트**
+
+```
+{ type=MSG_EVENT, device=DEV_LED, action=EVT_ALARM_ON, value=0x00 }
+```
+
+---
+
+### 15. 부저 울림 `EVT_ALARM_TRIGGERED`
 
 > 카운트다운 0 도달 시 자동 전송
 
@@ -316,20 +381,24 @@ LED 끄기        (ACT_OFF / DEV_LED)
 LED 밝기 설정   (ACT_SET_BRIGHTNESS / DEV_LED — value: LOW·MID·HIGH)
 부저 켜기       (ACT_ON  / DEV_BUZZER)
 부저 끄기       (ACT_OFF / DEV_BUZZER)
+멜로디 재생     (ACT_PLAY_MELODY / DEV_BUZZER)
 상태 조회       (ACT_GET_STATUS / MSG_QUERY — DEV_SENSOR·DEV_LED·DEV_BUZZER)
+조도 수치 조회  (ACT_GET_LUX / MSG_QUERY / DEV_SENSOR — 0~255)
     ↓
-[자동] 침입 감지 이벤트     EVT_INTRUSION  ← 서버 센서 스레드 자동 전송
-[자동] 경보 활성화 이벤트   EVT_ALARM_ON
+[자동] 침입 감지 이벤트     EVT_INTRUSION  ← 조도값 ≥ 170, 연속 3회
+[자동] 경보 활성화 이벤트   EVT_ALARM_ON   ← LED HIGH + 부저 ON
+[자동] 5초 후 경보 자동 해제
     ↓
 카운트다운 시작  (ACT_SET_NUMBER / DEV_SEGMENT — value: 1~9)
+카운트다운 중지  (ACT_OFF / DEV_SEGMENT)
     ↓
-[자동] 카운트다운 이벤트    EVT_COUNTDOWN  ← 서버 1초마다 자동 전송
-[자동] 부저 울림 이벤트     EVT_ALARM_TRIGGERED (카운트다운 0 도달 시)
-    ↓
-전체 경보 해제  (ACT_ALARM_OFF / DEV_SYSTEM)
+[자동] 카운트다운 이벤트    EVT_COUNTDOWN       ← 서버 1초마다 자동 전송
+[자동] 부저 울림 이벤트     EVT_ALARM_TRIGGERED ← 카운트다운 0 도달 시
     ↓
 클라이언트 종료 (SIGINT → close(fd) → exit)
 ```
+
+> **다중 클라이언트**: 모든 응답·이벤트는 연결된 최대 4개 클라이언트에 동시 broadcast된다.
 
 ---
 
@@ -369,6 +438,8 @@ typedef struct {
 #define ACT_SET_NUMBER      0x04
 #define ACT_GET_STATUS      0x05
 #define ACT_ALARM_OFF       0x06
+#define ACT_PLAY_MELODY     0x07   /* 부저 멜로디 재생 */
+#define ACT_GET_LUX         0x08   /* 조도 수치 조회 (0~255) */
 
 /* LED 밝기 */
 #define BRIGHTNESS_HIGH 0x03

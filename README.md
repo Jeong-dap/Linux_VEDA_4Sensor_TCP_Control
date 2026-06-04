@@ -75,8 +75,8 @@ Project/
 ### 빌드
 
 ```bash
-# 우분투에서
-make          # lib + server(ARM64) + client(x86_64) + deploy
+make          # lib + server(ARM64) + client(x86_64)
+make deploy   # 라즈베리파이로 scp 전송 (별도 실행)
 ```
 
 - `make lib` / `make server` / `make client` 독립 빌드 가능
