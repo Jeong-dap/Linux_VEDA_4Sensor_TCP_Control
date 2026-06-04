@@ -51,7 +51,7 @@ extern void (*fp_buzzer_cleanup)(void);
 extern pthread_t g_melody_tid;
 extern int       g_melody_running;
 
-extern int  (*fp_sensor_init)(int, int);
+extern int  (*fp_sensor_init)(int);
 extern int  (*fp_sensor_read)(void);
 extern void (*fp_sensor_cleanup)(void);
 
