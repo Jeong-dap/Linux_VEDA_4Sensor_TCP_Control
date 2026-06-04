@@ -160,10 +160,10 @@ void buzzer_stop_melody(void);        // g_stop=1 → usleep 루프 종료
 void buzzer_cleanup(void);
 ```
 
-**include/light_sensor.h** — 디지털 입력 2핀 (OR 논리)
+**include/light_sensor.h** — 디지털 입력
 ```c
-int  sensor_init(int gpio_pin1, int gpio_pin2);  // GPIO 24, 25
-int  sensor_read(void);   // 0=정상, 1=차단(둘 중 하나라도 차단 시)
+int  sensor_init(int gpio_pin);  // GPIO 24
+int  sensor_read(void);   // 0=정상, 1=차단
 void sensor_cleanup(void);
 ```
 
@@ -241,8 +241,7 @@ recv(fd, &msg, sizeof(Message), 0);
 |------|---------|-----------|
 | LED | GPIO 18 | softPwm (duty 25/50/100%) |
 | 부저 | GPIO 23 | softTone (1000Hz 경보음, Für Elise 멜로디) |
-| 조도센서1 | GPIO 24 | 디지털 입력 (digitalRead) |
-| 조도센서2 | GPIO 25 | 디지털 입력 (OR 논리, 어느 하나 차단 시 감지) |
+| 조도센서 | GPIO 24 | 디지털 입력 (digitalRead) |
 | 7세그먼트 | GPIO 4,17,27,22,5,6,13,19 | 디지털 출력 8핀 (a~g+dp), common anode |
 
 WiringPi: 각 `.so`의 `init()` 함수에서 `wiringPiSetupGpio()` 호출 (BCM 번호 체계)
@@ -368,7 +367,7 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ### 자동 경보 (서버 주도)
 
 ```
-센서 스레드: sensor_read() 100ms 폴링 (GPIO 24 OR GPIO 25)
+센서 스레드: sensor_read() 100ms 폴링 (GPIO 24)
 → 차단 감지 (연속 3회 확인 — 디바운싱)
 → mutex_lock → alarm_active=1, sensor_blocked=1, led/buzzer_state=1 → mutex_unlock
 → dispatch_led(ACT_SET_BRIGHTNESS, BRIGHTNESS_HIGH)
