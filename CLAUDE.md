@@ -28,7 +28,7 @@ Project/
 ├── lib/
 │   ├── led.c           # LED 제어 (softPwm) → led.so
 │   ├── buzzer.c        # 부저 제어 (softTone) + Für Elise 멜로디 → buzzer.so
-│   ├── cds.c  # 조도센서 I2C(PCF8591T) 제어 → cds.so
+│   ├── cds.c           # 조도센서 I2C(PCF8591T) 제어 → cds.so
 │   └── segment.c       # 7세그먼트 제어 (common anode) → segment.so
 ├── include/
 │   ├── protocol.h      # Message 구조체, 모든 상수 정의
@@ -79,7 +79,7 @@ all: lib server client deploy
 lib:
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/led.so          lib/led.c          $(SRV_LDFLAGS)
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/buzzer.so        lib/buzzer.c       $(SRV_LDFLAGS)
-    $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/cds.so  lib/cds.c $(SRV_LDFLAGS)
+    $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/cds.so            lib/cds.c          $(SRV_LDFLAGS)
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/segment.so       lib/segment.c      $(SRV_LDFLAGS)
 
 server: lib
@@ -163,7 +163,7 @@ void buzzer_cleanup(void);
 **include/cds.h** — I2C (PCF8591T ADC)
 ```c
 int  sensor_init(int i2c_addr);  // 기본 주소: 0x48
-int  sensor_read(void);          // 0~255, 높을수록 밝음
+int  sensor_read(void);          // 0~255, 높을수록 어두움 (170 이상 = 빛 꺼짐)
 void sensor_cleanup(void);
 ```
 
@@ -209,6 +209,7 @@ typedef struct {
 #define ACT_GET_STATUS      0x05
 #define ACT_ALARM_OFF       0x06
 #define ACT_PLAY_MELODY     0x07   // 부저 멜로디 재생 (Für Elise)
+#define ACT_GET_LUX         0x08   // 조도 수치 조회 (0~255)
 
 /* LED 밝기 (ACT_SET_BRIGHTNESS의 value) */
 #define BRIGHTNESS_LOW  0x01   // duty cycle 25%
@@ -360,6 +361,18 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ./alarm_client 172.20.33.119
 ```
 
+### 클라이언트 메뉴 구성
+
+```
+[1] LED 제어         — ON / OFF / 밝기 3단계 (LOW·MID·HIGH)
+[2] 부저 제어        — ON / OFF / 멜로디 재생 (Für Elise)
+[3] 세그먼트 제어    — 1~9 카운트다운 시작
+[4] 상태 조회        — LED / 부저 / 센서 ON·OFF 상태
+[5] 조도 수치 확인   — PCF8591T 현재 조도값 (0~255)
+[6] 도움말
+[0] 종료 (Ctrl+C)
+```
+
 ---
 
 ## 핵심 동작 흐름
@@ -367,7 +380,7 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ### 자동 경보 (서버 주도)
 
 ```
-센서 스레드: sensor_read() 100ms 폴링 (PCF8591T I2C, 임계값 100 미만 시 차단)
+센서 스레드: sensor_read() 100ms 폴링 (PCF8591T I2C, 조도값 170 이상 시 빛 꺼짐 감지)
 → 차단 감지 (연속 3회 확인 — 디바운싱)
 → mutex_lock → alarm_active=1, sensor_blocked=1, led/buzzer_state=1 → mutex_unlock
 → dispatch_led(ACT_SET_BRIGHTNESS, BRIGHTNESS_HIGH)
@@ -376,6 +389,7 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
     { MSG_EVENT, DEV_SENSOR, EVT_INTRUSION, 0 }
     { MSG_EVENT, DEV_LED,    EVT_ALARM_ON,  0 }
 → log_event("INTRUSION DETECTED") → /tmp/alarm.log + 데몬화 전 tty
+→ 5초 후 자동 해제: dispatch_led(ACT_OFF), dispatch_buzzer(ACT_OFF), alarm_active=0
 ```
 
 ### 카운트다운 경보 해제 (클라이언트 주도)
@@ -413,6 +427,11 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 → { MSG_RESP, device, ACT_GET_STATUS, 현재값 } 응답
    DEV_SENSOR: 0=정상, 1=차단
    DEV_LED/DEV_BUZZER: 0=OFF, 1=ON
+
+클라이언트: { MSG_QUERY, DEV_SENSOR, ACT_GET_LUX, 0 }
+서버:
+→ fp_sensor_read() 즉시 호출
+→ { MSG_RESP, DEV_SENSOR, ACT_GET_LUX, 조도값(0~255) } 응답
 ```
 
 ---
@@ -449,7 +468,7 @@ void log_event(const char *msg) {
 | 카운트다운 중 새 ACT_SET_NUMBER | pthread_cancel + pthread_join 후 재시작 |
 | ACT_ALARM_OFF | stop_melody_thread() + 세그먼트 스레드 취소 모두 처리 |
 | dlopen 경로 문제 (데몬 CWD = `/`) | readlink("/proc/self/exe") 로 절대경로 계산, 데몬화 전에 로드 |
-| 조도센서 노이즈 오감지 | 연속 3회 임계값(100) 미만 확인 후 경보 발동 (디바운싱) |
+| 조도센서 노이즈 오감지 | 연속 3회 임계값(170) 이상 확인 후 경보 발동 (디바운싱) |
 | SIGPIPE | SIG_IGN — 클라이언트 갑작스런 종료 시 서버 크래시 방지 |
 | 포트 재사용 오류 | SO_REUSEADDR 적용 |
 | 기존 클라이언트 재접속 | 새 클라이언트 accept 시 이전 fd close 후 교체 |
@@ -476,5 +495,5 @@ void log_event(const char *msg) {
 |------|------|------|-----------|
 | 6/2 (1일차) | 기반 구축 ✅ | 헤더 5종, 공유 라이브러리 4종, Makefile, server.h | 2장, 3장, WiringPi |
 | 6/3 (2일차) | 서버 구현 ✅ | daemon.c, dlopen 로드, 장치 전담 스레드, TCP accept, handler.c | 5-6장, 7-8장, 9장 |
-| 6/4 (3일차) | 클라이언트 + 추가기능 ✅ | client/main.c (CLI 메뉴, 이벤트 수신), 로그, 멜로디 | 3-4장, 5-6장 |
+| 6/4 (3일차) | 클라이언트 + 추가기능 ✅ | client/main.c (CLI 메뉴 6항목, 이벤트 수신), 로그, 멜로디, 조도 수치 조회, 경보 5초 자동 해제, PCF8591T I2C 센서 교체 | 3-4장, 5-6장 |
 | 6/5 (4일차) | 마무리 | 통합 테스트, gdb 디버깅, README, 제출 파일 구성 | 1장 |

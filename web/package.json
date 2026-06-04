@@ -1,7 +1,0 @@
-{
-  "name": "alarm-web",
-  "version": "1.0.0",
-  "dependencies": {
-    "ws": "^8.0.0"
-  }
-}
