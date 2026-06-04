@@ -94,9 +94,10 @@ client:
 
 deploy:
     -ssh $(PIHOST) pkill -f alarm_server
-    ssh $(PIHOST) mkdir -p $(PIDIR)/lib
+    ssh $(PIHOST) mkdir -p $(PIDIR)/lib $(PIDIR)/web
     scp alarm_server $(PIHOST):$(PIDIR)/
     scp lib/*.so     $(PIHOST):$(PIDIR)/lib/
+    scp web/server.js web/index.html web/package.json $(PIHOST):$(PIDIR)/web/
 
 clean:
     rm -f alarm_server alarm_client lib/*.so
@@ -105,7 +106,7 @@ clean:
 빌드 명령:
 - `make all` — lib + server(크로스) + client(네이티브) + deploy
 - `make lib` / `make server` / `make client` 독립 빌드
-- `make deploy` — alarm_server + lib/*.so를 라즈베리파이로 scp 전송 후 기존 프로세스 종료
+- `make deploy` — alarm_server + lib/*.so + web/ 파일을 라즈베리파이로 scp 전송 후 기존 프로세스 종료
 - `make CROSS= all` — 라즈베리파이에서 직접 빌드 시 크로스컴파일러 비활성화
 
 ---
@@ -390,8 +391,9 @@ CLI 클라이언트 (alarm_client) ───────────────
 
 - C 서버는 최대 **4개 클라이언트** 동시 연결 지원 (MAX_CLIENTS 4)
 - 이벤트 발생 시 `broadcast_msg()` 로 모든 클라이언트에 동시 전송
-- 웹 실행: 우분투에서 `cd web && node server.js 172.20.33.119`
-- 브라우저: `http://우분투IP:60000` (Tailscale: `http://100.80.55.100:60000`)
+- 웹 실행: 라즈베리파이에서 `cd ~/Project/web && node server.js` (기본 접속: 127.0.0.1)
+- 브라우저: `http://172.20.33.119:60000`
+- 모든 응답·이벤트 `broadcast_msg()` 로 전파 — CLI와 웹이 동일한 로그 공유
 
 ---
 
