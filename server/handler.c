@@ -94,7 +94,7 @@ static void stop_melody_thread(void) {
 /* ════════════════════════════════════════
    센서 감시 스레드 — 100ms 폴링, 디바운싱 3회
    ════════════════════════════════════════ */
-#define LIGHT_THRESHOLD 160  /* 이 값 이상이면 빛 꺼짐(차단) 감지 */
+#define LIGHT_THRESHOLD 170  /* 이 값 이상이면 빛 꺼짐(차단) 감지 */
 
 void *sensor_thread_fn(void *arg) {
     (void)arg;
