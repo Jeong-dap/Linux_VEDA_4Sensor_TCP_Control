@@ -104,7 +104,8 @@ clean:
 ```
 
 빌드 명령:
-- `make all` — lib + server(크로스) + client(네이티브) + deploy
+- `make all` — lib + server(크로스) + client(네이티브)
+- `make deploy` 는 별도 실행 — 라즈베리파이로 scp 전송
 - `make lib` / `make server` / `make client` 독립 빌드
 - `make deploy` — alarm_server + lib/*.so + web/ 파일을 라즈베리파이로 scp 전송 후 기존 프로세스 종료
 - `make CROSS= all` — 라즈베리파이에서 직접 빌드 시 크로스컴파일러 비활성화
