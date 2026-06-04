@@ -26,7 +26,7 @@ all: lib server client deploy
 lib:
 	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/led.so          lib/led.c          $(SRV_LDFLAGS)
 	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/buzzer.so        lib/buzzer.c       $(SRV_LDFLAGS)
-	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/light_sensor.so  lib/light_sensor.c $(SRV_LDFLAGS)
+	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/cds.so            lib/cds.c          $(SRV_LDFLAGS)
 	$(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/segment.so       lib/segment.c      $(SRV_LDFLAGS)
 
 server: lib

@@ -28,13 +28,13 @@ Project/
 ├── lib/
 │   ├── led.c           # LED 제어 (softPwm) → led.so
 │   ├── buzzer.c        # 부저 제어 (softTone) + Für Elise 멜로디 → buzzer.so
-│   ├── light_sensor.c  # 조도센서 2핀 제어 → light_sensor.so
+│   ├── cds.c  # 조도센서 I2C(PCF8591T) 제어 → cds.so
 │   └── segment.c       # 7세그먼트 제어 (common anode) → segment.so
 ├── include/
 │   ├── protocol.h      # Message 구조체, 모든 상수 정의
 │   ├── led.h
 │   ├── buzzer.h
-│   ├── light_sensor.h
+│   ├── cds.h
 │   └── segment.h
 ├── docs/
 │   ├── 기획서.md
@@ -79,7 +79,7 @@ all: lib server client deploy
 lib:
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/led.so          lib/led.c          $(SRV_LDFLAGS)
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/buzzer.so        lib/buzzer.c       $(SRV_LDFLAGS)
-    $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/light_sensor.so  lib/light_sensor.c $(SRV_LDFLAGS)
+    $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/cds.so  lib/cds.c $(SRV_LDFLAGS)
     $(CC_SRV) -fPIC -shared $(SRV_CFLAGS) -o lib/segment.so       lib/segment.c      $(SRV_LDFLAGS)
 
 server: lib
@@ -160,10 +160,10 @@ void buzzer_stop_melody(void);        // g_stop=1 → usleep 루프 종료
 void buzzer_cleanup(void);
 ```
 
-**include/light_sensor.h** — 디지털 입력
+**include/cds.h** — I2C (PCF8591T ADC)
 ```c
-int  sensor_init(int gpio_pin);  // GPIO 24
-int  sensor_read(void);   // 0=정상, 1=차단
+int  sensor_init(int i2c_addr);  // 기본 주소: 0x48
+int  sensor_read(void);          // 0~255, 높을수록 밝음
 void sensor_cleanup(void);
 ```
 
@@ -241,7 +241,7 @@ recv(fd, &msg, sizeof(Message), 0);
 |------|---------|-----------|
 | LED | GPIO 18 | softPwm (duty 25/50/100%) |
 | 부저 | GPIO 23 | softTone (1000Hz 경보음, Für Elise 멜로디) |
-| 조도센서 | GPIO 24 | 디지털 입력 (digitalRead) |
+| 조도센서 | I2C SDA/SCL (GPIO2/3) | PCF8591T ADC — 0~255 조도값 |
 | 7세그먼트 | GPIO 4,17,27,22,5,6,13,19 | 디지털 출력 8핀 (a~g+dp), common anode |
 
 WiringPi: 각 `.so`의 `init()` 함수에서 `wiringPiSetupGpio()` 호출 (BCM 번호 체계)
@@ -367,7 +367,7 @@ signal(SIGQUIT, SIG_IGN);         // Ctrl+\ (종료+코어덤프) 무시
 ### 자동 경보 (서버 주도)
 
 ```
-센서 스레드: sensor_read() 100ms 폴링 (GPIO 24)
+센서 스레드: sensor_read() 100ms 폴링 (PCF8591T I2C, 임계값 100 미만 시 차단)
 → 차단 감지 (연속 3회 확인 — 디바운싱)
 → mutex_lock → alarm_active=1, sensor_blocked=1, led/buzzer_state=1 → mutex_unlock
 → dispatch_led(ACT_SET_BRIGHTNESS, BRIGHTNESS_HIGH)
@@ -449,7 +449,7 @@ void log_event(const char *msg) {
 | 카운트다운 중 새 ACT_SET_NUMBER | pthread_cancel + pthread_join 후 재시작 |
 | ACT_ALARM_OFF | stop_melody_thread() + 세그먼트 스레드 취소 모두 처리 |
 | dlopen 경로 문제 (데몬 CWD = `/`) | readlink("/proc/self/exe") 로 절대경로 계산, 데몬화 전에 로드 |
-| 조도센서 노이즈 오감지 | 연속 3회 차단 확인 후 경보 발동 (dibaouncing) |
+| 조도센서 노이즈 오감지 | 연속 3회 임계값(100) 미만 확인 후 경보 발동 (디바운싱) |
 | SIGPIPE | SIG_IGN — 클라이언트 갑작스런 종료 시 서버 크래시 방지 |
 | 포트 재사용 오류 | SO_REUSEADDR 적용 |
 | 기존 클라이언트 재접속 | 새 클라이언트 accept 시 이전 fd close 후 교체 |

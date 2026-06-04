@@ -94,13 +94,16 @@ static void stop_melody_thread(void) {
 /* ════════════════════════════════════════
    센서 감시 스레드 — 100ms 폴링, 디바운싱 3회
    ════════════════════════════════════════ */
+#define LIGHT_THRESHOLD 160  /* 이 값 이상이면 빛 꺼짐(차단) 감지 */
+
 void *sensor_thread_fn(void *arg) {
     (void)arg;
     struct timespec ts = {0, 100 * 1000 * 1000};  /* 100ms */
     int consec = 0;
 
     while (1) {
-        int blocked = fp_sensor_read();
+        int lux     = fp_sensor_read();
+        int blocked = (lux >= LIGHT_THRESHOLD);
 
         if (blocked) {
             consec++;
@@ -138,6 +141,19 @@ void *sensor_thread_fn(void *arg) {
                 }
                 log_event("INTRUSION DETECTED");
                 log_event("ALARM ON (LED HIGH + BUZZER)");
+
+                sleep(5);
+
+                dispatch_led(ACT_OFF, 0);
+                dispatch_buzzer(ACT_OFF);
+                pthread_mutex_lock(&g_state.lock);
+                g_state.alarm_active   = 0;
+                g_state.led_state      = 0;
+                g_state.led_brightness = 0;
+                g_state.buzzer_state   = 0;
+                g_state.sensor_blocked = 0;
+                pthread_mutex_unlock(&g_state.lock);
+                log_event("ALARM AUTO OFF (5s)");
             }
         }
 
@@ -384,6 +400,13 @@ void *handle_client(void *arg) {
 
         /* ── MSG_QUERY ── */
         case MSG_QUERY: {
+            if (msg.device == DEV_SENSOR && msg.action == ACT_GET_LUX) {
+                uint8_t lux = (uint8_t)fp_sensor_read();
+                resp = (Message){MSG_RESP, DEV_SENSOR, ACT_GET_LUX, lux};
+                send(cfd, &resp, sizeof(resp), 0);
+                break;
+            }
+
             uint8_t val;
             pthread_mutex_lock(&g_state.lock);
             switch (msg.device) {
