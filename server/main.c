@@ -16,8 +16,7 @@
 #define PORT        8080
 #define GPIO_LED     18
 #define GPIO_BUZZER  23
-#define GPIO_SENSOR1 24
-#define GPIO_SENSOR2 25
+#define GPIO_SENSOR  24
 
 static int g_seg_pins[8] = {4, 17, 27, 22, 5, 6, 13, 19};
 
@@ -61,7 +60,7 @@ void (*fp_buzzer_cleanup)(void);
 pthread_t g_melody_tid     = 0;
 int       g_melody_running = 0;
 
-int  (*fp_sensor_init)(int, int);
+int  (*fp_sensor_init)(int);
 int  (*fp_sensor_read)(void);
 void (*fp_sensor_cleanup)(void);
 
@@ -183,7 +182,7 @@ int main(void) {
     /* GPIO 초기화 (.so 내부에서 wiringPiSetupGpio 포함) */
     fp_led_init(GPIO_LED);
     fp_buzzer_init(GPIO_BUZZER);
-    fp_sensor_init(GPIO_SENSOR1, GPIO_SENSOR2);
+    fp_sensor_init(GPIO_SENSOR);
     fp_segment_init(g_seg_pins);
 
     /* 장치 전담 스레드 생성 */
