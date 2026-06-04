@@ -31,6 +31,7 @@ typedef struct {
 #define ACT_GET_STATUS      0x05
 #define ACT_ALARM_OFF       0x06
 #define ACT_PLAY_MELODY     0x07   /* 부저 멜로디 재생 */
+#define ACT_GET_LUX         0x08   /* 조도 수치 조회 (0~255) */
 
 /* LED 밝기 (ACT_SET_BRIGHTNESS의 value) */
 #define BRIGHTNESS_LOW  0x01   /* duty cycle 25% */

@@ -16,7 +16,7 @@
 #define PORT        8080
 #define GPIO_LED     18
 #define GPIO_BUZZER  23
-#define GPIO_SENSOR  24
+#define I2C_SENSOR_ADDR  0x48
 
 static int g_seg_pins[8] = {4, 17, 27, 22, 5, 6, 13, 19};
 
@@ -129,7 +129,7 @@ static void load_libraries(const char *base_dir) {
     fp_buzzer_stop_melody  = dlsym(h, "buzzer_stop_melody");
     fp_buzzer_cleanup      = dlsym(h, "buzzer_cleanup");
 
-    LOAD("light_sensor", h)
+    LOAD("cds", h)
     fp_sensor_init    = dlsym(h, "sensor_init");
     fp_sensor_read    = dlsym(h, "sensor_read");
     fp_sensor_cleanup = dlsym(h, "sensor_cleanup");
@@ -182,7 +182,7 @@ int main(void) {
     /* GPIO 초기화 (.so 내부에서 wiringPiSetupGpio 포함) */
     fp_led_init(GPIO_LED);
     fp_buzzer_init(GPIO_BUZZER);
-    fp_sensor_init(GPIO_SENSOR);
+    fp_sensor_init(I2C_SENSOR_ADDR);
     fp_segment_init(g_seg_pins);
 
     /* 장치 전담 스레드 생성 */

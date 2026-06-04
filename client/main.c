@@ -59,7 +59,9 @@ static void *recv_thread_fn(void *arg) {
             }
 
             printf("\n");
-            if (msg.action == ACT_GET_STATUS) {
+            if (msg.action == ACT_GET_LUX) {
+                printf("  [조도] 현재 밝기 수치: %d / 255\n", msg.value);
+            } else if (msg.action == ACT_GET_STATUS) {
                 const char *state_str;
                 if (msg.device == DEV_SENSOR)
                     state_str = msg.value ? "차단(침입)" : "정상";
@@ -218,8 +220,8 @@ static void print_help(void) {
     printf("  │  1. LED 제어   — ON / OFF / 밝기 설정 │\n");
     printf("  │  2. 부저 제어  — ON / OFF / 멜로디    │\n");
     printf("  │  3. 세그먼트   — 1~9 카운트다운 시작 │\n");
-    printf("  │  4. 경보 해제  — 부저+LED 즉시 OFF    │\n");
-    printf("  │  5. 상태 조회  — LED/부저/센서 확인   │\n");
+    printf("  │  4. 상태 조회  — LED/부저/센서 확인   │\n");
+    printf("  │  5. 조도 수치  — 현재 밝기 수치 조회  │\n");
     printf("  │  6. 도움말                            │\n");
     printf("  │  0. 종료                              │\n");
     printf("  ├───────────────────────────────────────┤\n");
@@ -236,8 +238,8 @@ static void show_main_menu(void) {
     printf("  ║  1. LED 제어                      ║\n");
     printf("  ║  2. 부저 제어                     ║\n");
     printf("  ║  3. 세그먼트 제어 (카운트다운)    ║\n");
-    printf("  ║  4. 경보 해제                     ║\n");
-    printf("  ║  5. 상태 조회                     ║\n");
+    printf("  ║  4. 상태 조회                     ║\n");
+    printf("  ║  5. 조도 수치 확인                ║\n");
     printf("  ║  6. 도움말                        ║\n");
     printf("  ║  0. 종료                          ║\n");
     printf("  ╚═══════════════════════════════════╝\n");
@@ -281,11 +283,10 @@ int main(int argc, char *argv[]) {
         case 1: menu_led();     break;
         case 2: menu_buzzer();  break;
         case 3: menu_segment(); break;
-        case 4:
-            send_msg((Message){MSG_CMD, DEV_SYSTEM, ACT_ALARM_OFF, 0});
-            printf("  경보 해제 명령을 전송했습니다.\n");
+        case 4: menu_status();  break;
+        case 5:
+            send_msg((Message){MSG_QUERY, DEV_SENSOR, ACT_GET_LUX, 0});
             break;
-        case 5: menu_status();  break;
         case 6: print_help();   break;
         case 0:
         case -1:
