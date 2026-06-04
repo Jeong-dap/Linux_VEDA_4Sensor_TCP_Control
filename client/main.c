@@ -173,6 +173,7 @@ static void menu_segment(void) {
         printf("  │   세그먼트 카운트다운   │\n");
         printf("  ├─────────────────────────┤\n");
         printf("  │  1~9: 카운트다운 시작   │\n");
+        printf("  │  10 : 카운트다운 중지   │\n");
         printf("  │  0  : 뒤로              │\n");
         printf("  └─────────────────────────┘\n");
 
@@ -181,8 +182,10 @@ static void menu_segment(void) {
 
         if (c >= 1 && c <= 9)
             send_msg((Message){MSG_CMD, DEV_SEGMENT, ACT_SET_NUMBER, (uint8_t)c});
+        else if (c == 10)
+            send_msg((Message){MSG_CMD, DEV_SEGMENT, ACT_OFF, 0});
         else
-            printf("  1~9 사이 숫자를 입력하세요.\n");
+            printf("  1~9 시작, 10 중지를 입력하세요.\n");
     }
 }
 

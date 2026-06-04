@@ -25,7 +25,8 @@ char g_tty_path[64] = "";  /* 데몬화 전 터미널 경로 (log_event에서 �
 /* ── 공유 상태 ── */
 SystemState g_state = {
     .segment_value = -1,
-    .client_fd     = -1,
+    .client_fds    = {-1, -1, -1, -1},
+    .n_clients     = 0,
     .lock          = PTHREAD_MUTEX_INITIALIZER,
 };
 
@@ -76,6 +77,15 @@ void dispatch_led(int action, int value) {
     g_led_cmd.pending = 1;
     pthread_cond_signal(&g_led_cond);
     pthread_mutex_unlock(&g_led_mtx);
+}
+
+void broadcast_msg(Message *msg) {
+    pthread_mutex_lock(&g_state.lock);
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (g_state.client_fds[i] >= 0)
+            send(g_state.client_fds[i], msg, sizeof(*msg), MSG_NOSIGNAL);
+    }
+    pthread_mutex_unlock(&g_state.lock);
 }
 
 void dispatch_buzzer(int action) {
@@ -201,12 +211,19 @@ int main(void) {
         int cfd = accept(sfd, (struct sockaddr *)&cli, &cli_len);
         if (cfd < 0) continue;
 
-        /* 기존 클라이언트 연결 정리 후 새 클라이언트 등록 */
+        /* 빈 슬롯에 새 클라이언트 등록 */
         pthread_mutex_lock(&g_state.lock);
-        if (g_state.client_fd >= 0)
-            close(g_state.client_fd);
-        g_state.client_fd = cfd;
+        int added = 0;
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (g_state.client_fds[i] < 0) {
+                g_state.client_fds[i] = cfd;
+                g_state.n_clients++;
+                added = 1;
+                break;
+            }
+        }
         pthread_mutex_unlock(&g_state.lock);
+        if (!added) { close(cfd); continue; }
 
         pthread_t htid;
         pthread_create(&htid, NULL, handle_client, (void *)(intptr_t)cfd);
