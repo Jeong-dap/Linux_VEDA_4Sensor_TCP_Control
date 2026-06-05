@@ -6,3 +6,6 @@ lib/*.so
 # 빌드 오브젝트
 *.o
 *.a
+
+# scp.sh
+scp.sh
