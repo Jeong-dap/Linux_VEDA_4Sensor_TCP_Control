@@ -179,6 +179,10 @@ cat /tmp/alarm.log
 ### 2. 라즈베리파이 — 웹 브리지
 
 ```bash
+# Node.js 미설치 시 먼저 설치
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
 cd ~/Project/web
 npm install    # 최초 1회
 node server.js
