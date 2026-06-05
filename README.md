@@ -32,6 +32,43 @@ CLI 클라이언트 (alarm_client) ←── TCP:8080 ──→ 라즈베리파�
 - 조도센서 I2C 주소: `0x48` / 조도값 0~255 (170 이상 = 빛 꺼짐 감지)
 - 7세그먼트: Common Anode (HIGH=OFF)
 
+### 하드웨어 연결 상세
+
+**LED — GPIO 18**
+```
+GPIO18 (핀12) ──[220Ω]── LED 애노드(+, 긴 다리)
+LED 캐소드(-, 짧은 다리) ── GND
+```
+
+**부저 — GPIO 23**
+```
+GPIO23 (핀16) ── 부저(+)
+부저(-) ── GND
+```
+
+**조도센서 — PCF8591T I2C 모듈**
+```
+모듈 VCC ── 3.3V (핀1)
+모듈 GND ── GND  (핀6)
+모듈 SDA ── GPIO2 SDA (핀3)
+모듈 SCL ── GPIO3 SCL (핀5)
+```
+
+**7세그먼트 — GPIO 4,17,27,22,5,6,13,19 (Common Anode)**
+
+| 세그먼트 핀 | 역할 | 라즈베리파이 연결 |
+|-------------|------|------------------|
+| 핀 1 (e) | 세그먼트 e | GPIO5 (핀29) |
+| 핀 2 (d) | 세그먼트 d | GPIO22 (핀15) |
+| 핀 3 (COM) | — | 미연결 |
+| 핀 4 (c) | 세그먼트 c | GPIO27 (핀13) |
+| 핀 5 (dp) | 소수점 | GPIO19 (핀35) |
+| 핀 6 (b) | 세그먼트 b | GPIO17 (핀11) |
+| 핀 7 (a) | 세그먼트 a | GPIO4 (핀7) |
+| 핀 8 (COM) | 공통 애노드 | [220Ω] → 3.3V (핀1 또는 핀17) |
+| 핀 9 (f) | 세그먼트 f | GPIO6 (핀31) |
+| 핀 10 (g) | 세그먼트 g | GPIO13 (핀33) |
+
 ---
 
 ## 디렉토리 구조
@@ -69,8 +106,41 @@ Project/
 
 ### 요구사항
 
-- 우분투: `aarch64-linux-gnu-gcc` (크로스컴파일러)
-- 라즈베리파이: WiringPi, Node.js 20+
+**우분투 (빌드 PC)**
+```bash
+# 크로스컴파일러 설치 (최초 1회)
+sudo apt install gcc-aarch64-linux-gnu
+```
+
+**라즈베리파이 (최초 1회)**
+```bash
+# I2C 활성화
+sudo raspi-config
+# → Interface Options → I2C → Enable
+
+# WiringPi 설치 확인
+gpio -v
+
+# Node.js 20 설치
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+### Makefile 설정 수정
+
+`make deploy` 전에 `Makefile` 상단의 두 변수를 본인 환경에 맞게 수정해야 합니다.
+
+```makefile
+PIHOST = <사용자명>@<라즈베리파이 IP>   # 예: njd990603@172.20.33.119
+PIDIR  = /home/<사용자명>/Project        # 예: /home/njd990603/Project
+```
+
+### 소스코드 가져오기 (우분투)
+
+```bash
+git clone https://github.com/Jeong-dap/Linux_VEDA_4Sensor_TCP_Comtrol
+cd Linux_VEDA_4Sensor_TCP_Comtrol
+```
 
 ### 빌드
 
@@ -96,9 +166,15 @@ make deploy   # 라즈베리파이로 scp 전송 (별도 실행)
 ### 1. 라즈베리파이 — C 서버
 
 ```bash
-# make deploy 시 자동 실행됨. 수동 실행:
+cd ~/Project
 ./alarm_server
+
+# 실행 확인
+ps aux | grep alarm_server
+cat /tmp/alarm.log
 ```
+
+> `make deploy` 시 기존 프로세스를 자동 종료 후 배포함.
 
 ### 2. 라즈베리파이 — 웹 브리지
 
@@ -111,13 +187,14 @@ node server.js
 ### 3. 우분투 — CLI 클라이언트
 
 ```bash
-./alarm_client 172.20.33.119
+./alarm_client <RPI IP Address>
+# 예: ./alarm_client 172.20.33.119
 ```
 
 ### 4. 브라우저 — 웹 UI
 
 ```
-http://172.20.33.119:60000
+http://<RPI IP Address>:60000
 ```
 
 ---
@@ -132,6 +209,18 @@ http://172.20.33.119:60000
 [5] 조도 수치 확인   — 현재 조도값 (0~255)
 [6] 도움말
 [0] 종료 (Ctrl+C)
+```
+
+---
+
+## 서버 종료
+
+```bash
+# 라즈베리파이에서
+pkill -f alarm_server
+
+# 웹 브리지 종료
+Ctrl+C   # node server.js 실행 중인 터미널에서
 ```
 
 ---
