@@ -195,6 +195,9 @@ function connect() {
         addLog(`[응답] ${dev} → ${res}`, msg.value === 0 ? 'ok' : 'alarm');
       }
     }
+    else if (msg.type === 'error') {
+      addLog('[오류] ' + msg.message, 'alarm');
+    }
   };
 
   ws.onclose = () => {
@@ -204,8 +207,11 @@ function connect() {
 }
 
 function send(cmd, extra = {}) {
-  if (ws && ws.readyState === WebSocket.OPEN)
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ cmd, ...extra }));
+  } else {
+    addLog('WebSocket이 연결되어 있지 않습니다.', 'alarm');
+  }
 }
 
 function addLog(text, cls = 'info') {

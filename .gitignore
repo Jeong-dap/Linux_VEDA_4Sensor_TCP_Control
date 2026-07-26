@@ -2,10 +2,15 @@
 alarm_server
 alarm_client
 lib/*.so
+tests/test_protocol_io
+tests/test_protocol_io.exe
 
 # 빌드 오브젝트
 *.o
 *.a
+
+# Node.js 설치 산출물
+web/node_modules/
 
 # scp.sh
 scp.sh
