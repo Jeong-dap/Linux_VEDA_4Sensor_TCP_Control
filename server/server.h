@@ -34,9 +34,6 @@ extern BuzzerCmd        g_buzzer_cmd;
 extern pthread_mutex_t  g_buzzer_mtx;
 extern pthread_cond_t   g_buzzer_cond;
 
-extern pthread_t        g_seg_tid;
-extern int              g_seg_running;
-
 /* ── .so 함수 포인터 (main.c 정의) ── */
 extern int  (*fp_led_init)(int);
 extern void (*fp_led_on)(void);
@@ -50,9 +47,6 @@ extern void (*fp_buzzer_off)(void);
 extern void (*fp_buzzer_play_melody)(void);
 extern void (*fp_buzzer_stop_melody)(void);
 extern void (*fp_buzzer_cleanup)(void);
-
-extern pthread_t g_melody_tid;
-extern int       g_melody_running;
 
 extern int  (*fp_sensor_init)(int);
 extern int  (*fp_sensor_read)(void);
