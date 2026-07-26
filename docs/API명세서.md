@@ -242,7 +242,7 @@ typedef struct {
 | value 범위 | 의미 |
 |-----------|------|
 | `0` ~ `169` | 밝음 (정상) |
-| `170` ~ `255` | 어두움 (빛 꺼짐 감지) |
+| `175` ~ `255` | 어두움 (빛 꺼짐 감지) |
 
 ---
 
@@ -321,7 +321,7 @@ typedef struct {
 
 ### 13. 침입 감지 `EVT_INTRUSION`
 
-> 조도센서 조도값 ≥ 170이 연속 3회 감지될 때 자동 전송. 경보는 **5초 후 자동 해제**된다.
+> 조도센서 조도값 ≥ 175가 연속 3회 감지될 때 자동 전송. 경보는 **5초 후 자동 해제**된다.
 
 **이벤트**
 
@@ -385,7 +385,7 @@ LED 밝기 설정   (ACT_SET_BRIGHTNESS / DEV_LED — value: LOW·MID·HIGH)
 상태 조회       (ACT_GET_STATUS / MSG_QUERY — DEV_SENSOR·DEV_LED·DEV_BUZZER)
 조도 수치 조회  (ACT_GET_LUX / MSG_QUERY / DEV_SENSOR — 0~255)
     ↓
-[자동] 침입 감지 이벤트     EVT_INTRUSION  ← 조도값 ≥ 170, 연속 3회
+[자동] 침입 감지 이벤트     EVT_INTRUSION  ← 조도값 ≥ 175, 연속 3회
 [자동] 경보 활성화 이벤트   EVT_ALARM_ON   ← LED HIGH + 부저 ON
 [자동] 5초 후 경보 자동 해제
     ↓
@@ -398,7 +398,8 @@ LED 밝기 설정   (ACT_SET_BRIGHTNESS / DEV_LED — value: LOW·MID·HIGH)
 클라이언트 종료 (SIGINT → close(fd) → exit)
 ```
 
-> **다중 클라이언트**: 모든 응답·이벤트는 연결된 최대 4개 클라이언트에 동시 broadcast된다.
+> **다중 클라이언트**: 이벤트는 연결된 최대 4개 클라이언트에 broadcast되고,
+> 명령·조회 응답은 요청한 클라이언트에만 전송된다.
 
 ---
 

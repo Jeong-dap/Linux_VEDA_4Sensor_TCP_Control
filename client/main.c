@@ -9,24 +9,25 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "protocol.h"
+#include "protocol_io.h"
 
 #define DEFAULT_IP "127.0.0.1"
 #define PORT       8080
 
 static int g_sock = -1;
 
-static void sigint_handler(int sig) {
-    (void)sig;
+static void termination_handler(int sig) {
+    static const char message[] = "\n[클라이언트 종료]\n";
     if (g_sock >= 0) close(g_sock);
-    printf("\n[클라이언트 종료]\n");
-    exit(0);
+    write(STDOUT_FILENO, message, sizeof(message) - 1);
+    _exit(128 + sig);
 }
 
 /* ── 이벤트 수신 스레드 ── */
 static void *recv_thread_fn(void *arg) {
     (void)arg;
     Message msg;
-    while (recv(g_sock, &msg, sizeof(msg), 0) > 0) {
+    while (protocol_recv_message(g_sock, &msg) == 1) {
         if (msg.type == MSG_EVENT) {
             printf("\n");
             switch (msg.action) {
@@ -81,7 +82,7 @@ static void *recv_thread_fn(void *arg) {
 }
 
 static void send_msg(Message msg) {
-    if (send(g_sock, &msg, sizeof(msg), 0) < 0)
+    if (protocol_send_message(g_sock, &msg) < 0)
         perror("send");
 }
 
@@ -251,8 +252,8 @@ static void show_main_menu(void) {
 int main(int argc, char *argv[]) {
     const char *server_ip = (argc >= 2) ? argv[1] : DEFAULT_IP;
 
-    signal(SIGINT,  sigint_handler);
-    signal(SIGTERM, SIG_IGN);
+    signal(SIGINT,  termination_handler);
+    signal(SIGTERM, termination_handler);
     signal(SIGHUP,  SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);  /* Ctrl+Z (일시정지) 무시 */
