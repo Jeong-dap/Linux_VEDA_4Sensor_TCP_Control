@@ -2,12 +2,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include <time.h>
 #include <pthread.h>
 #include <sys/socket.h>
 #include "protocol.h"
+#include "protocol_io.h"
 #include "server.h"
+
+static pthread_mutex_t g_melody_control_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t g_melody_tid;
+static atomic_int g_melody_running = 0;
+static int g_melody_joinable = 0;
+
+static pthread_mutex_t g_segment_control_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t g_segment_tid;
+static atomic_int g_segment_running = 0;
+static int g_segment_joinable = 0;
 
 /* ════════════════════════════════════════
    LED 전담 스레드
@@ -58,8 +70,9 @@ static void melody_cleanup(void *arg) {
     (void)arg;
     fp_buzzer_stop_melody();
     pthread_mutex_lock(&g_state.lock);
-    g_melody_running = 0;
+    g_state.buzzer_state = 0;
     pthread_mutex_unlock(&g_state.lock);
+    atomic_store(&g_melody_running, 0);
 }
 
 void *melody_thread_fn(void *arg) {
@@ -72,22 +85,50 @@ void *melody_thread_fn(void *arg) {
 
     pthread_cleanup_pop(0);
     pthread_mutex_lock(&g_state.lock);
-    g_melody_running = 0;
+    g_state.buzzer_state = 0;
     pthread_mutex_unlock(&g_state.lock);
+    atomic_store(&g_melody_running, 0);
     return NULL;
 }
 
-/* 진행 중인 멜로디 스레드 취소 후 join */
-static void stop_melody_thread(void) {
-    pthread_mutex_lock(&g_state.lock);
-    pthread_t tid  = g_melody_tid;
-    int       alive = g_melody_running;
-    pthread_mutex_unlock(&g_state.lock);
-
-    if (alive) {
+static void stop_melody_locked(void) {
+    if (g_melody_joinable) {
         fp_buzzer_stop_melody();
-        pthread_cancel(tid);
-        pthread_join(tid, NULL);
+        if (atomic_load(&g_melody_running)) {
+            pthread_cancel(g_melody_tid);
+        }
+        pthread_join(g_melody_tid, NULL);
+        g_melody_joinable = 0;
+        atomic_store(&g_melody_running, 0);
+    }
+}
+
+/* 진행 중인 멜로디를 중단하고 종료된 스레드 자원도 회수한다. */
+static void stop_melody_thread(void) {
+    pthread_mutex_lock(&g_melody_control_lock);
+    stop_melody_locked();
+    pthread_mutex_unlock(&g_melody_control_lock);
+}
+
+static int start_melody_thread(void) {
+    int result;
+
+    pthread_mutex_lock(&g_melody_control_lock);
+    stop_melody_locked();
+    atomic_store(&g_melody_running, 1);
+    result = pthread_create(&g_melody_tid, NULL, melody_thread_fn, NULL);
+    if (result == 0) {
+        g_melody_joinable = 1;
+    } else {
+        atomic_store(&g_melody_running, 0);
+    }
+    pthread_mutex_unlock(&g_melody_control_lock);
+    return result;
+}
+
+static void send_response(int client_fd, const Message *response) {
+    if (protocol_send_message(client_fd, response) < 0) {
+        perror("send response");
     }
 }
 
@@ -102,7 +143,11 @@ void *sensor_thread_fn(void *arg) {
     int consec = 0;
 
     while (1) {
-        int lux     = fp_sensor_read();
+        int lux = fp_sensor_read();
+        if (lux < 0) {
+            nanosleep(&ts, NULL);
+            continue;
+        }
         int blocked = (lux >= LIGHT_THRESHOLD);
 
         if (blocked) {
@@ -129,6 +174,7 @@ void *sensor_thread_fn(void *arg) {
             pthread_mutex_unlock(&g_state.lock);
 
             if (!already) {
+                stop_melody_thread();
                 dispatch_led(ACT_SET_BRIGHTNESS, BRIGHTNESS_HIGH);
                 dispatch_buzzer(ACT_ON);
 
@@ -163,21 +209,29 @@ void *sensor_thread_fn(void *arg) {
    세그먼트 카운트다운 스레드 (pthread_cancel 가능)
    ════════════════════════════════════════ */
 static void seg_cleanup(void *arg) {
-    (void)arg;
+    int buzzer_owned = *(int *)arg;
+
     fp_segment_display(-1);
+    if (buzzer_owned) {
+        dispatch_buzzer(ACT_OFF);
+    }
     pthread_mutex_lock(&g_state.lock);
-    g_seg_running      = 0;
     g_state.segment_value = -1;
+    if (buzzer_owned) {
+        g_state.buzzer_state = 0;
+    }
     pthread_mutex_unlock(&g_state.lock);
+    atomic_store(&g_segment_running, 0);
 }
 
 void *segment_thread_fn(void *arg) {
     int count = (int)(intptr_t)arg;
+    int buzzer_owned = 0;
 
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
     pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 
-    pthread_cleanup_push(seg_cleanup, NULL);
+    pthread_cleanup_push(seg_cleanup, &buzzer_owned);
 
     for (; count >= 0; count--) {
         fp_segment_display(count);
@@ -192,11 +246,13 @@ void *segment_thread_fn(void *arg) {
 
         if (count == 0) {
             /* 카운트다운 완료 → 부저 ON, 이벤트 전송 */
+            stop_melody_thread();
             pthread_mutex_lock(&g_state.lock);
             g_state.buzzer_state = 1;
             pthread_mutex_unlock(&g_state.lock);
 
             dispatch_buzzer(ACT_ON);
+            buzzer_owned = 1;
 
             Message alarm_evt = {MSG_EVENT, DEV_BUZZER, EVT_ALARM_TRIGGERED, 0};
             broadcast_msg(&alarm_evt);
@@ -211,6 +267,7 @@ void *segment_thread_fn(void *arg) {
             sleep(2);  /* 2초 더 후 부저 OFF (총 3초) */
 
             dispatch_buzzer(ACT_OFF);
+            buzzer_owned = 0;
             pthread_mutex_lock(&g_state.lock);
             g_state.buzzer_state = 0;
             pthread_mutex_unlock(&g_state.lock);
@@ -223,219 +280,230 @@ void *segment_thread_fn(void *arg) {
     /* 정상 완료: cleanup 핸들러 제거만 (실행 안 함) */
     pthread_cleanup_pop(0);
 
-    pthread_mutex_lock(&g_state.lock);
-    g_seg_running = 0;
-    pthread_mutex_unlock(&g_state.lock);
+    atomic_store(&g_segment_running, 0);
 
     return NULL;
+}
+
+static void stop_segment_locked(void) {
+    if (!g_segment_joinable) {
+        return;
+    }
+    if (atomic_load(&g_segment_running)) {
+        pthread_cancel(g_segment_tid);
+    }
+    pthread_join(g_segment_tid, NULL);
+    g_segment_joinable = 0;
+    atomic_store(&g_segment_running, 0);
+}
+
+static void stop_segment_thread(void) {
+    pthread_mutex_lock(&g_segment_control_lock);
+    stop_segment_locked();
+    pthread_mutex_unlock(&g_segment_control_lock);
+}
+
+static int start_segment_thread(uint8_t start_value) {
+    int result;
+
+    pthread_mutex_lock(&g_segment_control_lock);
+    stop_segment_locked();
+    atomic_store(&g_segment_running, 1);
+    result = pthread_create(
+        &g_segment_tid,
+        NULL,
+        segment_thread_fn,
+        (void *)(intptr_t)(int)start_value
+    );
+    if (result == 0) {
+        g_segment_joinable = 1;
+    } else {
+        atomic_store(&g_segment_running, 0);
+    }
+    pthread_mutex_unlock(&g_segment_control_lock);
+    return result;
 }
 
 /* ════════════════════════════════════════
    클라이언트 핸들러 스레드
    ════════════════════════════════════════ */
+static Message error_response(const Message *request) {
+    return (Message){MSG_RESP, request->device, request->action, RESP_ERR};
+}
+
+static Message handle_led_command(const Message *command) {
+    switch (command->action) {
+    case ACT_ON:
+        pthread_mutex_lock(&g_state.lock);
+        g_state.led_state = 1;
+        pthread_mutex_unlock(&g_state.lock);
+        dispatch_led(ACT_ON, 0);
+        return (Message){MSG_RESP, DEV_LED, ACT_ON, RESP_OK};
+
+    case ACT_OFF:
+        pthread_mutex_lock(&g_state.lock);
+        g_state.led_state = 0;
+        g_state.led_brightness = 0;
+        pthread_mutex_unlock(&g_state.lock);
+        dispatch_led(ACT_OFF, 0);
+        return (Message){MSG_RESP, DEV_LED, ACT_OFF, RESP_OK};
+
+    case ACT_SET_BRIGHTNESS:
+        if (command->value < BRIGHTNESS_LOW || command->value > BRIGHTNESS_HIGH) {
+            return error_response(command);
+        }
+        pthread_mutex_lock(&g_state.lock);
+        g_state.led_state = 1;
+        g_state.led_brightness = command->value;
+        pthread_mutex_unlock(&g_state.lock);
+        dispatch_led(ACT_SET_BRIGHTNESS, command->value);
+        return (Message){MSG_RESP, DEV_LED, ACT_SET_BRIGHTNESS, RESP_OK};
+
+    default:
+        return error_response(command);
+    }
+}
+
+static Message handle_buzzer_command(const Message *command) {
+    switch (command->action) {
+    case ACT_ON:
+        stop_melody_thread();
+        pthread_mutex_lock(&g_state.lock);
+        g_state.buzzer_state = 1;
+        pthread_mutex_unlock(&g_state.lock);
+        dispatch_buzzer(ACT_ON);
+        return (Message){MSG_RESP, DEV_BUZZER, ACT_ON, RESP_OK};
+
+    case ACT_OFF:
+        stop_melody_thread();
+        pthread_mutex_lock(&g_state.lock);
+        g_state.buzzer_state = 0;
+        pthread_mutex_unlock(&g_state.lock);
+        dispatch_buzzer(ACT_OFF);
+        return (Message){MSG_RESP, DEV_BUZZER, ACT_OFF, RESP_OK};
+
+    case ACT_PLAY_MELODY:
+        if (start_melody_thread() != 0) {
+            return error_response(command);
+        }
+        pthread_mutex_lock(&g_state.lock);
+        g_state.buzzer_state = 1;
+        pthread_mutex_unlock(&g_state.lock);
+        log_event("MELODY START (Für Elise)");
+        return (Message){MSG_RESP, DEV_BUZZER, ACT_PLAY_MELODY, RESP_OK};
+
+    default:
+        return error_response(command);
+    }
+}
+
+static Message handle_segment_command(const Message *command) {
+    if (command->action == ACT_OFF) {
+        stop_segment_thread();
+        log_event("COUNTDOWN STOPPED (manual)");
+        return (Message){MSG_RESP, DEV_SEGMENT, ACT_OFF, RESP_OK};
+    }
+    if (command->action != ACT_SET_NUMBER ||
+        command->value < 1 ||
+        command->value > 9) {
+        return error_response(command);
+    }
+    if (start_segment_thread(command->value) != 0) {
+        return error_response(command);
+    }
+
+    pthread_mutex_lock(&g_state.lock);
+    g_state.segment_value = command->value;
+    pthread_mutex_unlock(&g_state.lock);
+
+    char log_message[64];
+    snprintf(log_message, sizeof(log_message), "COUNTDOWN STARTED: %d", command->value);
+    log_event(log_message);
+    return (Message){MSG_RESP, DEV_SEGMENT, ACT_SET_NUMBER, RESP_OK};
+}
+
+static Message handle_system_command(const Message *command) {
+    if (command->action != ACT_ALARM_OFF) {
+        return error_response(command);
+    }
+
+    stop_melody_thread();
+    stop_segment_thread();
+
+    pthread_mutex_lock(&g_state.lock);
+    g_state.alarm_active = 0;
+    g_state.led_state = 0;
+    g_state.led_brightness = 0;
+    g_state.buzzer_state = 0;
+    pthread_mutex_unlock(&g_state.lock);
+
+    dispatch_led(ACT_OFF, 0);
+    dispatch_buzzer(ACT_OFF);
+    log_event("ALARM OFF (manual)");
+    return (Message){MSG_RESP, DEV_SYSTEM, ACT_ALARM_OFF, RESP_OK};
+}
+
+static Message handle_command(const Message *command) {
+    switch (command->device) {
+    case DEV_LED:
+        return handle_led_command(command);
+    case DEV_BUZZER:
+        return handle_buzzer_command(command);
+    case DEV_SEGMENT:
+        return handle_segment_command(command);
+    case DEV_SYSTEM:
+        return handle_system_command(command);
+    default:
+        return error_response(command);
+    }
+}
+
+static Message handle_query(const Message *query) {
+    if (query->device == DEV_SENSOR && query->action == ACT_GET_LUX) {
+        int lux = fp_sensor_read();
+        if (lux < 0 || lux > UINT8_MAX) {
+            return (Message){MSG_RESP, DEV_SENSOR, 0, RESP_ERR};
+        }
+        return (Message){MSG_RESP, DEV_SENSOR, ACT_GET_LUX, (uint8_t)lux};
+    }
+    if (query->action != ACT_GET_STATUS) {
+        return error_response(query);
+    }
+
+    uint8_t value;
+    pthread_mutex_lock(&g_state.lock);
+    switch (query->device) {
+    case DEV_SENSOR:
+        value = (uint8_t)g_state.sensor_blocked;
+        break;
+    case DEV_LED:
+        value = (uint8_t)g_state.led_state;
+        break;
+    case DEV_BUZZER:
+        value = (uint8_t)g_state.buzzer_state;
+        break;
+    default:
+        pthread_mutex_unlock(&g_state.lock);
+        return error_response(query);
+    }
+    pthread_mutex_unlock(&g_state.lock);
+    return (Message){MSG_RESP, query->device, ACT_GET_STATUS, value};
+}
+
 void *handle_client(void *arg) {
     int cfd = (int)(intptr_t)arg;
-    Message msg, resp;
+    Message request;
 
-    while (recv(cfd, &msg, sizeof(msg), 0) > 0) {
-
-        switch (msg.type) {
-
-        /* ── MSG_CMD ── */
-        case MSG_CMD:
-            switch (msg.device) {
-
-            case DEV_LED: {
-                switch (msg.action) {
-                case ACT_ON:
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.led_state = 1;
-                    pthread_mutex_unlock(&g_state.lock);
-                    dispatch_led(ACT_ON, 0);
-                    resp = (Message){MSG_RESP, DEV_LED, ACT_ON, RESP_OK};
-                    break;
-                case ACT_OFF:
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.led_state = 0;
-                    pthread_mutex_unlock(&g_state.lock);
-                    dispatch_led(ACT_OFF, 0);
-                    resp = (Message){MSG_RESP, DEV_LED, ACT_OFF, RESP_OK};
-                    break;
-                case ACT_SET_BRIGHTNESS:
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.led_state      = 1;
-                    g_state.led_brightness = msg.value;
-                    pthread_mutex_unlock(&g_state.lock);
-                    dispatch_led(ACT_SET_BRIGHTNESS, msg.value);
-                    resp = (Message){MSG_RESP, DEV_LED, ACT_SET_BRIGHTNESS, RESP_OK};
-                    break;
-                default:
-                    resp = (Message){MSG_RESP, DEV_LED, msg.action, RESP_ERR};
-                }
-                broadcast_msg(&resp);
-                break;
-            }
-
-            case DEV_BUZZER: {
-                switch (msg.action) {
-                case ACT_ON:
-                    stop_melody_thread();
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.buzzer_state = 1;
-                    pthread_mutex_unlock(&g_state.lock);
-                    dispatch_buzzer(ACT_ON);
-                    resp = (Message){MSG_RESP, DEV_BUZZER, ACT_ON, RESP_OK};
-                    break;
-                case ACT_OFF:
-                    stop_melody_thread();
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.buzzer_state = 0;
-                    pthread_mutex_unlock(&g_state.lock);
-                    dispatch_buzzer(ACT_OFF);
-                    resp = (Message){MSG_RESP, DEV_BUZZER, ACT_OFF, RESP_OK};
-                    break;
-                case ACT_PLAY_MELODY:
-                    stop_melody_thread();
-                    pthread_mutex_lock(&g_state.lock);
-                    g_state.buzzer_state = 1;
-                    g_melody_running     = 1;
-                    pthread_mutex_unlock(&g_state.lock);
-                    pthread_create(&g_melody_tid, NULL, melody_thread_fn, NULL);
-                    log_event("MELODY START (Canon in D)");
-                    resp = (Message){MSG_RESP, DEV_BUZZER, ACT_PLAY_MELODY, RESP_OK};
-                    break;
-                default:
-                    resp = (Message){MSG_RESP, DEV_BUZZER, msg.action, RESP_ERR};
-                }
-                broadcast_msg(&resp);
-                break;
-            }
-
-            case DEV_SEGMENT: {
-                if (msg.action == ACT_OFF) {
-                    pthread_mutex_lock(&g_state.lock);
-                    pthread_t old_tid   = g_seg_tid;
-                    int       was_alive = g_seg_running;
-                    pthread_mutex_unlock(&g_state.lock);
-
-                    if (was_alive) {
-                        pthread_cancel(old_tid);
-                        pthread_join(old_tid, NULL);
-                    }
-                    log_event("COUNTDOWN STOPPED (manual)");
-                    resp = (Message){MSG_RESP, DEV_SEGMENT, ACT_OFF, RESP_OK};
-                    broadcast_msg(&resp);
-                    break;
-                }
-
-                if (msg.action != ACT_SET_NUMBER || msg.value < 1 || msg.value > 9) {
-                    resp = (Message){MSG_RESP, DEV_SEGMENT, msg.action, RESP_ERR};
-                    broadcast_msg(&resp);
-                    break;
-                }
-
-                /* 진행 중인 카운트다운 취소 */
-                pthread_mutex_lock(&g_state.lock);
-                pthread_t old_tid   = g_seg_tid;
-                int       was_alive = g_seg_running;
-                pthread_mutex_unlock(&g_state.lock);
-
-                if (was_alive) {
-                    pthread_cancel(old_tid);
-                    pthread_join(old_tid, NULL);
-                }
-
-                pthread_mutex_lock(&g_state.lock);
-                g_seg_running         = 1;
-                g_state.segment_value = msg.value;
-                pthread_mutex_unlock(&g_state.lock);
-
-                char logbuf[64];
-                snprintf(logbuf, sizeof(logbuf), "COUNTDOWN STARTED: %d", msg.value);
-                log_event(logbuf);
-
-                pthread_create(&g_seg_tid, NULL, segment_thread_fn,
-                               (void *)(intptr_t)(int)msg.value);
-
-                resp = (Message){MSG_RESP, DEV_SEGMENT, ACT_SET_NUMBER, RESP_OK};
-                broadcast_msg(&resp);
-                break;
-            }
-
-            case DEV_SYSTEM: {
-                if (msg.action != ACT_ALARM_OFF) {
-                    resp = (Message){MSG_RESP, DEV_SYSTEM, msg.action, RESP_ERR};
-                    broadcast_msg(&resp);
-                    break;
-                }
-
-                /* 멜로디·카운트다운 스레드 취소 */
-                stop_melody_thread();
-
-                pthread_mutex_lock(&g_state.lock);
-                pthread_t old_tid   = g_seg_tid;
-                int       was_alive = g_seg_running;
-                pthread_mutex_unlock(&g_state.lock);
-
-                if (was_alive) {
-                    pthread_cancel(old_tid);
-                    pthread_join(old_tid, NULL);
-                }
-
-                /* 상태 초기화 */
-                pthread_mutex_lock(&g_state.lock);
-                g_state.alarm_active   = 0;
-                g_state.led_state      = 0;
-                g_state.led_brightness = 0;
-                g_state.buzzer_state   = 0;
-                pthread_mutex_unlock(&g_state.lock);
-
-                dispatch_led(ACT_OFF, 0);
-                dispatch_buzzer(ACT_OFF);
-                log_event("ALARM OFF (manual)");
-
-                resp = (Message){MSG_RESP, DEV_SYSTEM, ACT_ALARM_OFF, RESP_OK};
-                broadcast_msg(&resp);
-                break;
-            }
-
-            default:
-                resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-                broadcast_msg(&resp);
-            }
-            break;  /* MSG_CMD end */
-
-        /* ── MSG_QUERY ── */
-        case MSG_QUERY: {
-            if (msg.device == DEV_SENSOR && msg.action == ACT_GET_LUX) {
-                uint8_t lux = (uint8_t)fp_sensor_read();
-                resp = (Message){MSG_RESP, DEV_SENSOR, ACT_GET_LUX, lux};
-                broadcast_msg(&resp);
-                break;
-            }
-
-            uint8_t val;
-            pthread_mutex_lock(&g_state.lock);
-            switch (msg.device) {
-            case DEV_SENSOR:  val = (uint8_t)g_state.sensor_blocked; break;
-            case DEV_LED:     val = (uint8_t)g_state.led_state;      break;
-            case DEV_BUZZER:  val = (uint8_t)g_state.buzzer_state;   break;
-            default:          val = RESP_ERR;                         break;
-            }
-            pthread_mutex_unlock(&g_state.lock);
-
-            if (msg.device == DEV_SENSOR || msg.device == DEV_LED || msg.device == DEV_BUZZER)
-                resp = (Message){MSG_RESP, msg.device, ACT_GET_STATUS, val};
-            else
-                resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-            broadcast_msg(&resp);
-            break;
+    while (protocol_recv_message(cfd, &request) == 1) {
+        Message response;
+        if (request.type == MSG_CMD) {
+            response = handle_command(&request);
+        } else if (request.type == MSG_QUERY) {
+            response = handle_query(&request);
+        } else {
+            response = error_response(&request);
         }
-
-        default:
-            resp = (Message){MSG_RESP, msg.device, msg.action, RESP_ERR};
-            broadcast_msg(&resp);
-        }
+        send_response(cfd, &response);
     }
 
     /* recv() == 0 : 클라이언트 연결 끊김 */

@@ -29,7 +29,7 @@ CLI 클라이언트 (alarm_client) ←── TCP:8080 ──→ 라즈베리파�
 | 조도센서 (PCF8591T) | I2C | SDA(핀3) / SCL(핀5) |
 | 7세그먼트 | 디지털 출력 8핀 | GPIO 4,17,27,22,5,6,13,19 |
 
-- 조도센서 I2C 주소: `0x48` / 조도값 0~255 (170 이상 = 빛 꺼짐 감지)
+- 조도센서 I2C 주소: `0x48` / 조도값 0~255 (175 이상 = 빛 꺼짐 감지)
 - 7세그먼트: Common Anode (HIGH=OFF)
 
 ### 하드웨어 연결 상세
@@ -82,9 +82,13 @@ Project/
 │   └── server.h     # 공유 구조체 + extern 선언
 ├── client/
 │   └── main.c       # CLI 메뉴 루프, 이벤트 수신 스레드
+├── common/
+│   └── protocol_io.c # TCP 4바이트 메시지 완전 송수신
 ├── web/
 │   ├── server.js    # Node.js WebSocket↔TCP 브리지 (포트 60000)
+│   ├── protocol.js  # 웹 프로토콜 인코딩·프레임 해석
 │   ├── index.html   # 웹 대시보드
+│   ├── test/        # Node.js 단위 테스트
 │   └── package.json
 ├── lib/
 │   ├── led.c        → led.so
@@ -97,6 +101,8 @@ Project/
 ├── docs/
 │   ├── 기획서.md
 │   └── 회로도.md
+├── tests/
+│   └── test_protocol_io.c
 └── Makefile
 ```
 
@@ -146,6 +152,8 @@ cd Linux_VEDA_4Sensor_TCP_Comtrol
 
 ```bash
 make          # lib + server(ARM64) + client(x86_64)
+make test     # Linux에서 TCP 통신 및 웹 프로토콜 회귀 테스트
+make analyze  # cppcheck가 설치된 경우 C 정적 분석
 make deploy   # 라즈베리파이로 scp 전송 (별도 실행)
 ```
 
@@ -157,7 +165,8 @@ make deploy   # 라즈베리파이로 scp 전송 (별도 실행)
 `make deploy` 실행 시 라즈베리파이로 자동 전송:
 - `alarm_server`
 - `lib/*.so`
-- `web/server.js`, `web/index.html`, `web/package.json`
+- `web/server.js`, `web/protocol.js`, `web/index.html`
+- `web/package.json`, `web/package-lock.json`
 
 ---
 
@@ -185,7 +194,7 @@ sudo apt install -y nodejs
 
 cd ~/Project/web
 npm install    # 최초 1회
-node server.js
+npm start
 ```
 
 ### 3. 우분투 — CLI 클라이언트
@@ -234,7 +243,7 @@ Ctrl+C   # node server.js 실행 중인 터미널에서
 ### 자동 경보 (서버 주도)
 
 1. 센서 스레드가 100ms마다 조도값 폴링
-2. 조도값 ≥ 170이 연속 3회 → 빛 꺼짐 감지
+2. 조도값 ≥ 175가 연속 3회 → 빛 꺼짐 감지
 3. LED 최대 밝기 ON + 부저 ON
 4. 모든 클라이언트에 `EVT_INTRUSION`, `EVT_ALARM_ON` 이벤트 전송
 5. **5초 후 자동 해제**
@@ -253,14 +262,16 @@ Ctrl+C   # node server.js 실행 중인 터미널에서
 ### 다중 클라이언트
 
 - C 서버가 최대 4개 클라이언트 동시 연결 지원
-- 모든 이벤트·응답은 `broadcast_msg()`로 전체 공유
+- 이벤트는 전체 연결에 방송하고 명령·조회 응답은 요청한 연결에만 반환
 - CLI와 웹에서 동시 제어·모니터링 가능
 
 ---
 
 ## TCP 프로토콜
 
-4바이트 고정 크기 메시지:
+4바이트 고정 크기 메시지입니다. TCP는 메시지 경계를 보존하지 않으므로
+C 프로그램은 `common/protocol_io.c`, 웹 브리지는 `web/protocol.js`에서
+완전한 4바이트 프레임이 모일 때까지 처리합니다.
 
 ```c
 typedef struct {
@@ -270,6 +281,9 @@ typedef struct {
     uint8_t value;   // 파라미터
 } Message;
 ```
+
+명령과 조회 응답(`MSG_RESP`)은 요청한 클라이언트에만 반환하고,
+시스템 이벤트(`MSG_EVENT`)만 연결된 전체 클라이언트에 방송합니다.
 
 ---
 

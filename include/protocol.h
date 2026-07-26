@@ -10,6 +10,8 @@ typedef struct {
     uint8_t value;
 } Message;
 
+_Static_assert(sizeof(Message) == 4, "Message wire format must be exactly 4 bytes");
+
 /* 메시지 타입 */
 #define MSG_CMD     0x01   /* Client → Server: 장치 제어 */
 #define MSG_EVENT   0x02   /* Server → Client: 이벤트 알림 */

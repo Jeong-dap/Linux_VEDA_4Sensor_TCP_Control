@@ -1,111 +1,167 @@
+'use strict';
+
+const fs = require('fs');
+const http = require('http');
+const net = require('net');
+const path = require('path');
 const WebSocket = require('ws');
-const net       = require('net');
-const http      = require('http');
-const fs        = require('fs');
-const path      = require('path');
 
-const PI_HOST  = process.argv[2] || '127.0.0.1';
-const PI_PORT  = 8080;
+const {
+    EVENT,
+    MSG,
+    commandMessage,
+    decodeFrames,
+} = require('./protocol');
+
+const PI_HOST = process.argv[2] || '127.0.0.1';
+const PI_PORT = 8080;
 const WEB_PORT = 60000;
+const RECONNECT_DELAY_MS = 3000;
 
-/* ── 프로토콜 상수 ── */
-const MSG_CMD   = 0x01, MSG_EVENT = 0x02, MSG_RESP = 0x03, MSG_QUERY = 0x04;
-const DEV_LED   = 0x01, DEV_BUZZER = 0x02, DEV_SENSOR = 0x03, DEV_SEGMENT = 0x04;
-const ACT_ON    = 0x01, ACT_OFF   = 0x02, ACT_SET_BRIGHTNESS = 0x03;
-const ACT_SET_NUMBER = 0x04, ACT_GET_STATUS = 0x05, ACT_PLAY_MELODY = 0x07, ACT_GET_LUX = 0x08;
-const EVT_INTRUSION = 0x01, EVT_ALARM_ON = 0x02, EVT_COUNTDOWN = 0x03, EVT_ALARM_TRIGGERED = 0x04;
+const INDEX_FILE = path.join(__dirname, 'index.html');
 
-/* ── HTTP 서버 ── */
-const httpServer = http.createServer((req, res) => {
-    const filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
-    fs.readFile(filePath, (err, data) => {
-        if (err) { res.writeHead(404); res.end('Not found'); return; }
-        const mime = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css' };
-        res.writeHead(200, { 'Content-Type': mime[path.extname(filePath)] || 'text/plain' });
-        res.end(data);
+const httpServer = http.createServer((request, response) => {
+    let pathname;
+    try {
+        pathname = new URL(request.url, 'http://localhost').pathname;
+    } catch {
+        response.writeHead(400);
+        response.end('Bad request');
+        return;
+    }
+
+    if (request.method !== 'GET' || (pathname !== '/' && pathname !== '/index.html')) {
+        response.writeHead(404);
+        response.end('Not found');
+        return;
+    }
+
+    fs.readFile(INDEX_FILE, (error, data) => {
+        if (error) {
+            response.writeHead(500);
+            response.end('Internal server error');
+            return;
+        }
+        response.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'X-Content-Type-Options': 'nosniff',
+        });
+        response.end(data);
     });
 });
 
-/* ── WebSocket 서버 ── */
-const wss = new WebSocket.Server({ server: httpServer });
+const wss = new WebSocket.Server({
+    server: httpServer,
+    maxPayload: 1024,
+});
 const wsClients = new Set();
 
-function broadcast(obj) {
-    const msg = JSON.stringify(obj);
-    wsClients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
+function broadcast(message) {
+    const encoded = JSON.stringify(message);
+    for (const client of wsClients) {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(encoded);
+        }
+    }
 }
 
-/* ── 라즈베리파이 TCP 연결 ── */
 let tcp = null;
-let tcpBuf = Buffer.alloc(0);
+let tcpBuffer = Buffer.alloc(0);
+let reconnectTimer = null;
+
+function isTcpConnected() {
+    return tcp !== null && !tcp.destroyed && tcp.readyState === 'open';
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer !== null) {
+        return;
+    }
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectPI();
+    }, RECONNECT_DELAY_MS);
+}
+
+function handleTcpMessage(message) {
+    const { type, device, action, value } = message;
+
+    if (type === MSG.EVENT) {
+        const labels = {
+            [EVENT.INTRUSION]: '침입 감지!',
+            [EVENT.ALARM_ON]: '경보 활성화 (LED HIGH + 부저)',
+            [EVENT.ALARM_TRIGGERED]: '카운트다운 완료 — 부저 울림!',
+            [EVENT.COUNTDOWN]: `카운트다운: ${value}`,
+        };
+        broadcast({
+            type: 'event',
+            action,
+            device,
+            value,
+            label: labels[action] || `이벤트 0x${action.toString(16)}`,
+        });
+    } else if (type === MSG.RESP) {
+        broadcast({ type: 'resp', device, action, value });
+    }
+}
 
 function connectPI() {
-    tcp = new net.Socket();
+    const socket = new net.Socket();
+    tcp = socket;
+    tcpBuffer = Buffer.alloc(0);
 
-    tcp.connect(PI_PORT, PI_HOST, () => {
+    socket.connect(PI_PORT, PI_HOST, () => {
         console.log(`[TCP] 라즈베리파이 ${PI_HOST}:${PI_PORT} 연결됨`);
         broadcast({ type: 'status', connected: true });
     });
 
-    tcp.on('data', data => {
-        tcpBuf = Buffer.concat([tcpBuf, data]);
-        while (tcpBuf.length >= 4) {
-            const [type, device, action, value] = tcpBuf;
-            tcpBuf = tcpBuf.slice(4);
-
-            if (type === MSG_EVENT) {
-                const labels = {
-                    [EVT_INTRUSION]:       '침입 감지!',
-                    [EVT_ALARM_ON]:        '경보 활성화 (LED HIGH + 부저)',
-                    [EVT_ALARM_TRIGGERED]: '카운트다운 완료 — 부저 울림!',
-                    [EVT_COUNTDOWN]:       `카운트다운: ${value}`,
-                };
-                broadcast({ type: 'event', action, device, value, label: labels[action] || `이벤트 0x${action.toString(16)}` });
-            } else if (type === MSG_RESP) {
-                broadcast({ type: 'resp', device, action, value });
-            }
+    socket.on('data', data => {
+        if (tcp !== socket) {
+            return;
         }
+        const decoded = decodeFrames(Buffer.concat([tcpBuffer, data]));
+        tcpBuffer = decoded.remaining;
+        decoded.messages.forEach(handleTcpMessage);
     });
 
-    tcp.on('close', () => {
+    socket.on('close', () => {
+        if (tcp !== socket) {
+            return;
+        }
+        tcp = null;
+        tcpBuffer = Buffer.alloc(0);
         console.log('[TCP] 연결 끊김 — 3초 후 재연결');
         broadcast({ type: 'status', connected: false });
-        setTimeout(connectPI, 3000);
+        scheduleReconnect();
     });
 
-    tcp.on('error', err => console.error('[TCP 오류]', err.message));
+    socket.on('error', error => {
+        console.error('[TCP 오류]', error.message);
+    });
 }
 
-function sendPI(type, device, action, value) {
-    if (tcp && !tcp.destroyed) tcp.write(Buffer.from([type, device, action, value]));
+function sendPI(message) {
+    if (!isTcpConnected()) {
+        return false;
+    }
+    return tcp.write(message);
 }
-
-/* ── 브라우저 명령 처리 ── */
-const handlers = {
-    led_on:        () => sendPI(MSG_CMD,   DEV_LED,     ACT_ON,             0),
-    led_off:       () => sendPI(MSG_CMD,   DEV_LED,     ACT_OFF,            0),
-    led_low:       () => sendPI(MSG_CMD,   DEV_LED,     ACT_SET_BRIGHTNESS, 0x01),
-    led_mid:       () => sendPI(MSG_CMD,   DEV_LED,     ACT_SET_BRIGHTNESS, 0x02),
-    led_high:      () => sendPI(MSG_CMD,   DEV_LED,     ACT_SET_BRIGHTNESS, 0x03),
-    buzzer_on:     () => sendPI(MSG_CMD,   DEV_BUZZER,  ACT_ON,             0),
-    buzzer_off:    () => sendPI(MSG_CMD,   DEV_BUZZER,  ACT_OFF,            0),
-    buzzer_melody: () => sendPI(MSG_CMD,   DEV_BUZZER,  ACT_PLAY_MELODY,    0),
-    query_led:     () => sendPI(MSG_QUERY, DEV_LED,     ACT_GET_STATUS,     0),
-    query_buzzer:  () => sendPI(MSG_QUERY, DEV_BUZZER,  ACT_GET_STATUS,     0),
-    query_sensor:  () => sendPI(MSG_QUERY, DEV_SENSOR,  ACT_GET_STATUS,     0),
-    query_lux:     () => sendPI(MSG_QUERY, DEV_SENSOR,  ACT_GET_LUX,        0),
-    segment:       msg => sendPI(MSG_CMD,  DEV_SEGMENT, ACT_SET_NUMBER, msg.value || 5),
-    segment_stop:  ()  => sendPI(MSG_CMD,  DEV_SEGMENT, ACT_OFF,        0),
-};
 
 wss.on('connection', ws => {
     wsClients.add(ws);
+    ws.send(JSON.stringify({ type: 'status', connected: isTcpConnected() }));
     console.log('[WS] 브라우저 접속');
+
     ws.on('message', raw => {
         try {
-            const msg = JSON.parse(raw);
-            if (handlers[msg.cmd]) handlers[msg.cmd](msg);
-        } catch (e) { console.error('[WS 오류]', e.message); }
+            const payload = JSON.parse(raw.toString());
+            const message = commandMessage(payload.cmd, payload);
+            if (!sendPI(message)) {
+                ws.send(JSON.stringify({ type: 'error', message: '장치 서버에 연결되어 있지 않습니다.' }));
+            }
+        } catch (error) {
+            ws.send(JSON.stringify({ type: 'error', message: error.message }));
+        }
     });
     ws.on('close', () => wsClients.delete(ws));
 });
