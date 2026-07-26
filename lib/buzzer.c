@@ -1,12 +1,13 @@
 #include <wiringPi.h>
 #include <softTone.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include "buzzer.h"
 
 #define BUZZER_FREQ 1000   /* Hz — 경보음 주파수 */
 
 static int          g_pin  = -1;
-static volatile int g_stop = 0;
+static atomic_int   g_stop = 0;
 
 /* ── Für Elise — Beethoven (도입부) ────────────────────────────── */
 typedef struct { int freq; int ms; } Note;
@@ -55,14 +56,14 @@ void buzzer_on(void) {
 }
 
 void buzzer_off(void) {
-    g_stop = 1;
+    atomic_store(&g_stop, 1);
     softToneWrite(g_pin, 0);
 }
 
 void buzzer_play_melody(void) {
-    g_stop = 0;
+    atomic_store(&g_stop, 0);
     int n = (int)(sizeof(fur_elise) / sizeof(fur_elise[0]));
-    for (int i = 0; i < n && !g_stop; i++) {
+    for (int i = 0; i < n && !atomic_load(&g_stop); i++) {
         softToneWrite(g_pin, fur_elise[i].freq);
         usleep((useconds_t)fur_elise[i].ms * 950);
         softToneWrite(g_pin, 0);
@@ -72,11 +73,11 @@ void buzzer_play_melody(void) {
 }
 
 void buzzer_stop_melody(void) {
-    g_stop = 1;
+    atomic_store(&g_stop, 1);
     softToneWrite(g_pin, 0);
 }
 
 void buzzer_cleanup(void) {
-    g_stop = 1;
+    atomic_store(&g_stop, 1);
     softToneWrite(g_pin, 0);
 }
