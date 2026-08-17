@@ -144,7 +144,7 @@ PIDIR  = /home/<사용자명>/Project        # 예: /home/njd990603/Project
 ### 소스코드 가져오기 (우분투)
 
 ```bash
-git clone https://github.com/Jeong-dap/Linux_VEDA_4Sensor_TCP_Comtrol
+git clone https://github.com/Jeong-dap/Linux_VEDA_4Sensor_TCP_Control
 cd Linux_VEDA_4Sensor_TCP_Comtrol
 ```
 
